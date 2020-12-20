@@ -3,6 +3,7 @@
  *
  * Copyright (C) Linus Torvalds, 2005
  */
+#define USE_THE_INDEX_COMPATIBILITY_MACROS
 #include "cache.h"
 #include "config.h"
 #include "diff.h"
@@ -25,8 +26,15 @@ int cmd_diff_files(int argc, const char **argv, const char *prefix)
 		usage(diff_files_usage);
 
 	git_config(git_diff_basic_config, NULL); /* no "diff" UI options */
-	init_revisions(&rev, prefix);
+	repo_init_revisions(the_repository, &rev, prefix);
 	rev.abbrev = 0;
+
+	/*
+	 * Consider "intent-to-add" files as new by default, unless
+	 * explicitly specified in the command line or anywhere else.
+	 */
+	rev.diffopt.ita_invisible_in_index = 1;
+
 	precompose_argv(argc, argv);
 
 	argc = setup_revisions(argc, argv, &rev, NULL);

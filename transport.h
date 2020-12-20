@@ -4,8 +4,8 @@
 #include "cache.h"
 #include "run-command.h"
 #include "remote.h"
-
-struct string_list;
+#include "list-objects-filter-options.h"
+#include "string-list.h"
 
 struct git_transport_options {
 	unsigned thin : 1;
@@ -15,12 +15,37 @@ struct git_transport_options {
 	unsigned self_contained_and_connected : 1;
 	unsigned update_shallow : 1;
 	unsigned deepen_relative : 1;
+
+	/* see documentation of corresponding flag in fetch-pack.h */
+	unsigned from_promisor : 1;
+
+	/*
+	 * If this transport supports connect or stateless-connect,
+	 * the corresponding field in struct fetch_pack_args is copied
+	 * here after fetching.
+	 *
+	 * See the definition of connectivity_checked in struct
+	 * fetch_pack_args for more information.
+	 */
+	unsigned connectivity_checked:1;
+
 	int depth;
 	const char *deepen_since;
 	const struct string_list *deepen_not;
 	const char *uploadpack;
 	const char *receivepack;
 	struct push_cas_option *cas;
+	struct list_objects_filter_options filter_options;
+
+	/*
+	 * This is only used during fetch. See the documentation of
+	 * negotiation_tips in struct fetch_pack_args.
+	 *
+	 * This field is only supported by transports that support connect or
+	 * stateless_connect. Set this field directly instead of using
+	 * transport_set_option().
+	 */
+	struct oid_array *negotiation_tips;
 };
 
 enum transport_family {
@@ -56,12 +81,25 @@ struct transport {
 	unsigned cloning : 1;
 
 	/*
+	 * Indicates that the transport is connected via a half-duplex
+	 * connection and should operate in stateless-rpc mode.
+	 */
+	unsigned stateless_rpc : 1;
+
+	/*
 	 * These strings will be passed to the {pre, post}-receive hook,
 	 * on the remote side, if both sides support the push options capability.
 	 */
 	const struct string_list *push_options;
 
-	char *pack_lockfile;
+	/*
+	 * These strings will be passed to the remote side on each command
+	 * request, if both sides support the server-option capability.
+	 */
+	const struct string_list *server_options;
+
+	struct string_list pack_lockfiles;
+
 	signed verbose : 3;
 	/**
 	 * Transports should not set this directly, and should use this
@@ -78,6 +116,8 @@ struct transport {
 	struct git_transport_options *smart_options;
 
 	enum transport_family family;
+
+	const struct git_hash_algo *hash_algo;
 };
 
 #define TRANSPORT_PUSH_ALL			(1<<0)
@@ -96,8 +136,9 @@ struct transport {
 #define TRANSPORT_PUSH_ATOMIC			(1<<13)
 #define TRANSPORT_PUSH_OPTIONS			(1<<14)
 #define TRANSPORT_RECURSE_SUBMODULES_ONLY	(1<<15)
+#define TRANSPORT_PUSH_FORCE_IF_INCLUDES	(1<<16)
 
-extern int transport_summary_width(const struct ref *refs);
+int transport_summary_width(const struct ref *refs);
 
 /* Returns a transport suitable for the url */
 struct transport *transport_get(struct remote *, const char *);
@@ -159,6 +200,18 @@ void transport_check_allowed(const char *type);
 /* Send push certificates */
 #define TRANS_OPT_PUSH_CERT "pushcert"
 
+/* Indicate that these objects are being fetched by a promisor */
+#define TRANS_OPT_FROM_PROMISOR "from-promisor"
+
+/* Filter objects for partial clone and fetch */
+#define TRANS_OPT_LIST_OBJECTS_FILTER "filter"
+
+/* Request atomic (all-or-nothing) updates when pushing */
+#define TRANS_OPT_ATOMIC "atomic"
+
+/* Require remote changes to be integrated locally. */
+#define TRANS_OPT_FORCE_IF_INCLUDES "force-if-includes"
+
 /**
  * Returns 0 if the option was used, non-zero otherwise. Prints a
  * message to stderr if the option is not used.
@@ -168,18 +221,36 @@ int transport_set_option(struct transport *transport, const char *name,
 void transport_set_verbosity(struct transport *transport, int verbosity,
 	int force_progress);
 
-#define REJECT_NON_FF_HEAD     0x01
-#define REJECT_NON_FF_OTHER    0x02
-#define REJECT_ALREADY_EXISTS  0x04
-#define REJECT_FETCH_FIRST     0x08
-#define REJECT_NEEDS_FORCE     0x10
+#define REJECT_NON_FF_HEAD      0x01
+#define REJECT_NON_FF_OTHER     0x02
+#define REJECT_ALREADY_EXISTS   0x04
+#define REJECT_FETCH_FIRST      0x08
+#define REJECT_NEEDS_FORCE      0x10
+#define REJECT_REF_NEEDS_UPDATE 0x20
 
-int transport_push(struct transport *connection,
-		   int refspec_nr, const char **refspec, int flags,
+int transport_push(struct repository *repo,
+		   struct transport *connection,
+		   struct refspec *rs, int flags,
 		   unsigned int * reject_reasons);
 
-const struct ref *transport_get_remote_refs(struct transport *transport);
+/*
+ * Retrieve refs from a remote.
+ *
+ * Optionally a list of ref prefixes can be provided which can be sent to the
+ * server (when communicating using protocol v2) to enable it to limit the ref
+ * advertisement.  Since ref filtering is done on the server's end (and only
+ * when using protocol v2), this can return refs which don't match the provided
+ * ref_prefixes.
+ */
+const struct ref *transport_get_remote_refs(struct transport *transport,
+					    const struct strvec *ref_prefixes);
 
+/*
+ * Fetch the hash algorithm used by a remote.
+ *
+ * This can only be called after fetching the remote refs.
+ */
+const struct git_hash_algo *transport_get_hash_algo(struct transport *transport);
 int transport_fetch_refs(struct transport *transport, struct ref *refs);
 void transport_unlock_pack(struct transport *transport);
 int transport_disconnect(struct transport *transport);
@@ -195,8 +266,6 @@ int transport_helper_init(struct transport *transport, const char *name);
 int bidirectional_transfer_loop(int input, int output);
 
 /* common methods used by transport.c and builtin/send-pack.c */
-void transport_verify_remote_names(int nr_heads, const char **heads);
-
 void transport_update_tracking_ref(struct remote *remote, struct ref *ref, int verbose);
 
 int transport_refs_pushed(struct ref *ref);
@@ -204,6 +273,7 @@ int transport_refs_pushed(struct ref *ref);
 void transport_print_push_status(const char *dest, struct ref *refs,
 		  int verbose, int porcelain, unsigned int *reject_reasons);
 
-typedef void alternate_ref_fn(const char *refname, const struct object_id *oid, void *);
-extern void for_each_alternate_ref(alternate_ref_fn, void *);
+/* common method used by transport-helper.c and send-pack.c */
+void reject_atomic_push(struct ref *refs, int mirror_mode);
+
 #endif

@@ -4,7 +4,7 @@ test_description='test main ref store api'
 
 . ./test-lib.sh
 
-RUN="test-ref-store main"
+RUN="test-tool ref-store main"
 
 test_expect_success 'pack_refs(PACK_REFS_ALL | PACK_REFS_PRUNE)' '
 	test_commit one &&
@@ -31,7 +31,10 @@ test_expect_success 'create_symref(FOO, refs/heads/master)' '
 test_expect_success 'delete_refs(FOO, refs/tags/new-tag)' '
 	git rev-parse FOO -- &&
 	git rev-parse refs/tags/new-tag -- &&
-	$RUN delete-refs 0 nothing FOO refs/tags/new-tag &&
+	m=$(git rev-parse master) &&
+	REF_NO_DEREF=1 &&
+	$RUN delete-refs $REF_NO_DEREF nothing FOO refs/tags/new-tag &&
+	test_must_fail git rev-parse --symbolic-full-name FOO &&
 	test_must_fail git rev-parse FOO -- &&
 	test_must_fail git rev-parse refs/tags/new-tag --
 '
@@ -45,7 +48,7 @@ test_expect_success 'rename_refs(master, new-master)' '
 '
 
 test_expect_success 'for_each_ref(refs/heads/)' '
-	$RUN for-each-ref refs/heads/ | cut -c 42- >actual &&
+	$RUN for-each-ref refs/heads/ | cut -d" " -f 2- >actual &&
 	cat >expected <<-\EOF &&
 	master 0x0
 	new-master 0x0
@@ -54,7 +57,7 @@ test_expect_success 'for_each_ref(refs/heads/)' '
 '
 
 test_expect_success 'for_each_ref() is sorted' '
-	$RUN for-each-ref refs/heads/ | cut -c 42- >actual &&
+	$RUN for-each-ref refs/heads/ | cut -d" " -f 2- >actual &&
 	sort actual > expected &&
 	test_cmp expected actual
 '
@@ -71,7 +74,7 @@ test_expect_success 'verify_ref(new-master)' '
 '
 
 test_expect_success 'for_each_reflog()' '
-	$RUN for-each-reflog | sort | cut -c 42- >actual &&
+	$RUN for-each-reflog | sort -k2 | cut -d" " -f 2- >actual &&
 	cat >expected <<-\EOF &&
 	HEAD 0x1
 	refs/heads/master 0x0

@@ -1,6 +1,8 @@
 #include "builtin.h"
 #include "cache.h"
+#include "config.h"
 #include "refs.h"
+#include "object-store.h"
 #include "object.h"
 #include "tag.h"
 #include "string-list.h"
@@ -23,14 +25,14 @@ static void show_one(const char *refname, const struct object_id *oid)
 	const char *hex;
 	struct object_id peeled;
 
-	if (!has_sha1_file(oid->hash))
+	if (!has_object_file(oid))
 		die("git show-ref: bad ref %s (%s)", refname,
 		    oid_to_hex(oid));
 
 	if (quiet)
 		return;
 
-	hex = find_unique_abbrev(oid->hash, abbrev);
+	hex = find_unique_abbrev(oid, abbrev);
 	if (hash_only)
 		printf("%s\n", hex);
 	else
@@ -40,7 +42,7 @@ static void show_one(const char *refname, const struct object_id *oid)
 		return;
 
 	if (!peel_ref(refname, &peeled)) {
-		hex = find_unique_abbrev(peeled.hash, abbrev);
+		hex = find_unique_abbrev(&peeled, abbrev);
 		printf("%s %s^{}\n", hex, refname);
 	}
 }
@@ -151,6 +153,7 @@ static int hash_callback(const struct option *opt, const char *arg, int unset)
 static int exclude_existing_callback(const struct option *opt, const char *arg,
 				     int unset)
 {
+	BUG_ON_OPT_NEG(unset);
 	exclude_arg = 1;
 	*(const char **)opt->value = arg;
 	return 0;
@@ -167,21 +170,22 @@ static const struct option show_ref_options[] = {
 	  N_("show the HEAD reference, even if it would be filtered out")),
 	OPT_BOOL('d', "dereference", &deref_tags,
 		    N_("dereference tags into object IDs")),
-	{ OPTION_CALLBACK, 's', "hash", &abbrev, N_("n"),
-	  N_("only show SHA1 hash using <n> digits"),
-	  PARSE_OPT_OPTARG, &hash_callback },
+	OPT_CALLBACK_F('s', "hash", &abbrev, N_("n"),
+		       N_("only show SHA1 hash using <n> digits"),
+		       PARSE_OPT_OPTARG, &hash_callback),
 	OPT__ABBREV(&abbrev),
 	OPT__QUIET(&quiet,
 		   N_("do not print results to stdout (useful with --verify)")),
-	{ OPTION_CALLBACK, 0, "exclude-existing", &exclude_existing_arg,
-	  N_("pattern"), N_("show refs from stdin that aren't in local repository"),
-	  PARSE_OPT_OPTARG | PARSE_OPT_NONEG, exclude_existing_callback },
+	OPT_CALLBACK_F(0, "exclude-existing", &exclude_existing_arg,
+		       N_("pattern"), N_("show refs from stdin that aren't in local repository"),
+		       PARSE_OPT_OPTARG | PARSE_OPT_NONEG, exclude_existing_callback),
 	OPT_END()
 };
 
 int cmd_show_ref(int argc, const char **argv, const char *prefix)
 {
 	git_config(git_default_config, NULL);
+
 	argc = parse_options(argc, argv, prefix, show_ref_options,
 			     show_ref_usage, 0);
 

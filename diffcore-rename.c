@@ -1,11 +1,14 @@
 /*
+ *
  * Copyright (C) 2005 Junio C Hamano
  */
 #include "cache.h"
 #include "diff.h"
 #include "diffcore.h"
+#include "object-store.h"
 #include "hashmap.h"
 #include "progress.h"
+#include "promisor-remote.h"
 
 /* Table of rename/copy destinations */
 
@@ -22,7 +25,7 @@ static int find_rename_dst(struct diff_filespec *two)
 	first = 0;
 	last = rename_dst_nr;
 	while (last > first) {
-		int next = (last + first) >> 1;
+		int next = first + ((last - first) >> 1);
 		struct diff_rename_dst *dst = &(rename_dst[next]);
 		int cmp = strcmp(two->path, dst->two->path);
 		if (!cmp)
@@ -57,8 +60,8 @@ static int add_rename_dst(struct diff_filespec *two)
 	ALLOC_GROW(rename_dst, rename_dst_nr + 1, rename_dst_alloc);
 	rename_dst_nr++;
 	if (first < rename_dst_nr)
-		memmove(rename_dst + first + 1, rename_dst + first,
-			(rename_dst_nr - first - 1) * sizeof(*rename_dst));
+		MOVE_ARRAY(rename_dst + first + 1, rename_dst + first,
+			   rename_dst_nr - first - 1);
 	rename_dst[first].two = alloc_filespec(two->path);
 	fill_filespec(rename_dst[first].two, &two->oid, two->oid_valid,
 		      two->mode);
@@ -94,7 +97,7 @@ static struct diff_rename_src *register_rename_src(struct diff_filepair *p)
 	}
 
 	while (last > first) {
-		int next = (last + first) >> 1;
+		int next = first + ((last - first) >> 1);
 		struct diff_rename_src *src = &(rename_src[next]);
 		int cmp = strcmp(one->path, src->p->one->path);
 		if (!cmp)
@@ -111,8 +114,8 @@ append_it:
 	ALLOC_GROW(rename_src, rename_src_nr + 1, rename_src_alloc);
 	rename_src_nr++;
 	if (first < rename_src_nr)
-		memmove(rename_src + first + 1, rename_src + first,
-			(rename_src_nr - first - 1) * sizeof(*rename_src));
+		MOVE_ARRAY(rename_src + first + 1, rename_src + first,
+			   rename_src_nr - first - 1);
 	rename_src[first].p = p;
 	rename_src[first].score = score;
 	return &(rename_src[first]);
@@ -140,9 +143,46 @@ struct diff_score {
 	short name_score;
 };
 
-static int estimate_similarity(struct diff_filespec *src,
+struct prefetch_options {
+	struct repository *repo;
+	int skip_unmodified;
+};
+static void prefetch(void *prefetch_options)
+{
+	struct prefetch_options *options = prefetch_options;
+	int i;
+	struct oid_array to_fetch = OID_ARRAY_INIT;
+
+	for (i = 0; i < rename_dst_nr; i++) {
+		if (rename_dst[i].pair)
+			/*
+			 * The loop in diffcore_rename() will not need these
+			 * blobs, so skip prefetching.
+			 */
+			continue; /* already found exact match */
+		diff_add_if_missing(options->repo, &to_fetch,
+				    rename_dst[i].two);
+	}
+	for (i = 0; i < rename_src_nr; i++) {
+		if (options->skip_unmodified &&
+		    diff_unmodified_pair(rename_src[i].p))
+			/*
+			 * The loop in diffcore_rename() will not need these
+			 * blobs, so skip prefetching.
+			 */
+			continue;
+		diff_add_if_missing(options->repo, &to_fetch,
+				    rename_src[i].p->one);
+	}
+	promisor_remote_get_direct(options->repo, to_fetch.oid, to_fetch.nr);
+	oid_array_clear(&to_fetch);
+}
+
+static int estimate_similarity(struct repository *r,
+			       struct diff_filespec *src,
 			       struct diff_filespec *dst,
-			       int minimum_score)
+			       int minimum_score,
+			       int skip_unmodified)
 {
 	/* src points at a file that existed in the original tree (or
 	 * optionally a file in the destination tree) and dst points
@@ -159,6 +199,15 @@ static int estimate_similarity(struct diff_filespec *src,
 	 */
 	unsigned long max_size, delta_size, base_size, src_copied, literal_added;
 	int score;
+	struct diff_populate_filespec_options dpf_options = {
+		.check_size_only = 1
+	};
+	struct prefetch_options prefetch_options = {r, skip_unmodified};
+
+	if (r == the_repository && has_promisor_remote()) {
+		dpf_options.missing_object_cb = prefetch;
+		dpf_options.missing_object_data = &prefetch_options;
+	}
 
 	/* We deal only with regular files.  Symlink renames are handled
 	 * only when they are exact matches --- in other words, no edits
@@ -177,10 +226,10 @@ static int estimate_similarity(struct diff_filespec *src,
 	 * say whether the size is valid or not!)
 	 */
 	if (!src->cnt_data &&
-	    diff_populate_filespec(src, CHECK_SIZE_ONLY))
+	    diff_populate_filespec(r, src, &dpf_options))
 		return 0;
 	if (!dst->cnt_data &&
-	    diff_populate_filespec(dst, CHECK_SIZE_ONLY))
+	    diff_populate_filespec(r, dst, &dpf_options))
 		return 0;
 
 	max_size = ((src->size > dst->size) ? src->size : dst->size);
@@ -198,12 +247,14 @@ static int estimate_similarity(struct diff_filespec *src,
 	if (max_size * (MAX_SCORE-minimum_score) < delta_size * MAX_SCORE)
 		return 0;
 
-	if (!src->cnt_data && diff_populate_filespec(src, 0))
+	dpf_options.check_size_only = 0;
+
+	if (!src->cnt_data && diff_populate_filespec(r, src, &dpf_options))
 		return 0;
-	if (!dst->cnt_data && diff_populate_filespec(dst, 0))
+	if (!dst->cnt_data && diff_populate_filespec(r, dst, &dpf_options))
 		return 0;
 
-	if (diffcore_count_changes(src, dst,
+	if (diffcore_count_changes(r, src, dst,
 				   &src->cnt_data, &dst->cnt_data,
 				   &src_copied, &literal_added))
 		return 0;
@@ -268,15 +319,16 @@ struct file_similarity {
 	struct diff_filespec *filespec;
 };
 
-static unsigned int hash_filespec(struct diff_filespec *filespec)
+static unsigned int hash_filespec(struct repository *r,
+				  struct diff_filespec *filespec)
 {
 	if (!filespec->oid_valid) {
-		if (diff_populate_filespec(filespec, 0))
+		if (diff_populate_filespec(r, filespec, NULL))
 			return 0;
-		hash_sha1_file(filespec->data, filespec->size, "blob",
-			       filespec->oid.hash);
+		hash_object_file(r->hash_algo, filespec->data, filespec->size,
+				 "blob", &filespec->oid);
 	}
-	return sha1hash(filespec->oid.hash);
+	return oidhash(&filespec->oid);
 }
 
 static int find_identical_files(struct hashmap *srcs,
@@ -284,21 +336,22 @@ static int find_identical_files(struct hashmap *srcs,
 				struct diff_options *options)
 {
 	int renames = 0;
-
 	struct diff_filespec *target = rename_dst[dst_index].two;
 	struct file_similarity *p, *best = NULL;
 	int i = 100, best_score = -1;
+	unsigned int hash = hash_filespec(options->repo, target);
 
 	/*
 	 * Find the best source match for specified destination.
 	 */
-	p = hashmap_get_from_hash(srcs, hash_filespec(target), NULL);
-	for (; p; p = hashmap_get_next(srcs, p)) {
+	p = hashmap_get_entry_from_hash(srcs, hash, NULL,
+					struct file_similarity, entry);
+	hashmap_for_each_entry_from(srcs, p, entry) {
 		int score;
 		struct diff_filespec *source = p->filespec;
 
 		/* False hash collision? */
-		if (oidcmp(&source->oid, &target->oid))
+		if (!oideq(&source->oid, &target->oid))
 			continue;
 		/* Non-regular files? If so, the modes must match! */
 		if (!S_ISREG(source->mode) || !S_ISREG(target->mode)) {
@@ -328,15 +381,17 @@ static int find_identical_files(struct hashmap *srcs,
 	return renames;
 }
 
-static void insert_file_table(struct hashmap *table, int index, struct diff_filespec *filespec)
+static void insert_file_table(struct repository *r,
+			      struct hashmap *table, int index,
+			      struct diff_filespec *filespec)
 {
 	struct file_similarity *entry = xmalloc(sizeof(*entry));
 
 	entry->index = index;
 	entry->filespec = filespec;
 
-	hashmap_entry_init(entry, hash_filespec(filespec));
-	hashmap_add(table, entry);
+	hashmap_entry_init(&entry->entry, hash_filespec(r, filespec));
+	hashmap_add(table, &entry->entry);
 }
 
 /*
@@ -356,14 +411,16 @@ static int find_exact_renames(struct diff_options *options)
 	 */
 	hashmap_init(&file_table, NULL, NULL, rename_src_nr);
 	for (i = rename_src_nr-1; i >= 0; i--)
-		insert_file_table(&file_table, i, rename_src[i].p->one);
+		insert_file_table(options->repo,
+				  &file_table, i,
+				  rename_src[i].p->one);
 
 	/* Walk the destinations and find best source match */
 	for (i = 0; i < rename_dst_nr; i++)
 		renames += find_identical_files(&file_table, i, options);
 
 	/* Free the hash data structure and entries */
-	hashmap_free(&file_table, 1);
+	hashmap_clear_and_free(&file_table, struct file_similarity, entry);
 
 	return renames;
 }
@@ -569,8 +626,10 @@ void diffcore_rename(struct diff_options *options)
 			    diff_unmodified_pair(rename_src[j].p))
 				continue;
 
-			this_src.score = estimate_similarity(one, two,
-							     minimum_score);
+			this_src.score = estimate_similarity(options->repo,
+							     one, two,
+							     minimum_score,
+							     skip_unmodified);
 			this_src.name_score = basename_same(one, two);
 			this_src.dst = i;
 			this_src.src = j;
@@ -588,7 +647,7 @@ void diffcore_rename(struct diff_options *options)
 	stop_progress(&progress);
 
 	/* cost matrix sorted by most to least similar pair */
-	QSORT(mx, dst_cnt * NUM_CANDIDATE_PER_DST, score_compare);
+	STABLE_QSORT(mx, dst_cnt * NUM_CANDIDATE_PER_DST, score_compare);
 
 	rename_count += find_renames(mx, dst_cnt, minimum_score, 0);
 	if (detect_rename == DIFF_DETECT_COPY)

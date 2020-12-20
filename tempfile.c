@@ -130,17 +130,17 @@ static void deactivate_tempfile(struct tempfile *tempfile)
 }
 
 /* Make sure errno contains a meaningful value on error */
-struct tempfile *create_tempfile(const char *path)
+struct tempfile *create_tempfile_mode(const char *path, int mode)
 {
 	struct tempfile *tempfile = new_tempfile();
 
 	strbuf_add_absolute_path(&tempfile->filename, path);
 	tempfile->fd = open(tempfile->filename.buf,
-			    O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+			    O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, mode);
 	if (O_CLOEXEC && tempfile->fd < 0 && errno == EINVAL)
 		/* Try again w/o O_CLOEXEC: the kernel might not support it */
 		tempfile->fd = open(tempfile->filename.buf,
-				    O_RDWR | O_CREAT | O_EXCL, 0666);
+				    O_RDWR | O_CREAT | O_EXCL, mode);
 	if (tempfile->fd < 0) {
 		deactivate_tempfile(tempfile);
 		return NULL;
@@ -165,11 +165,11 @@ struct tempfile *register_tempfile(const char *path)
 	return tempfile;
 }
 
-struct tempfile *mks_tempfile_sm(const char *template, int suffixlen, int mode)
+struct tempfile *mks_tempfile_sm(const char *filename_template, int suffixlen, int mode)
 {
 	struct tempfile *tempfile = new_tempfile();
 
-	strbuf_add_absolute_path(&tempfile->filename, template);
+	strbuf_add_absolute_path(&tempfile->filename, filename_template);
 	tempfile->fd = git_mkstemps_mode(tempfile->filename.buf, suffixlen, mode);
 	if (tempfile->fd < 0) {
 		deactivate_tempfile(tempfile);
@@ -179,7 +179,7 @@ struct tempfile *mks_tempfile_sm(const char *template, int suffixlen, int mode)
 	return tempfile;
 }
 
-struct tempfile *mks_tempfile_tsm(const char *template, int suffixlen, int mode)
+struct tempfile *mks_tempfile_tsm(const char *filename_template, int suffixlen, int mode)
 {
 	struct tempfile *tempfile = new_tempfile();
 	const char *tmpdir;
@@ -188,7 +188,7 @@ struct tempfile *mks_tempfile_tsm(const char *template, int suffixlen, int mode)
 	if (!tmpdir)
 		tmpdir = "/tmp";
 
-	strbuf_addf(&tempfile->filename, "%s/%s", tmpdir, template);
+	strbuf_addf(&tempfile->filename, "%s/%s", tmpdir, filename_template);
 	tempfile->fd = git_mkstemps_mode(tempfile->filename.buf, suffixlen, mode);
 	if (tempfile->fd < 0) {
 		deactivate_tempfile(tempfile);
@@ -198,12 +198,12 @@ struct tempfile *mks_tempfile_tsm(const char *template, int suffixlen, int mode)
 	return tempfile;
 }
 
-struct tempfile *xmks_tempfile_m(const char *template, int mode)
+struct tempfile *xmks_tempfile_m(const char *filename_template, int mode)
 {
 	struct tempfile *tempfile;
 	struct strbuf full_template = STRBUF_INIT;
 
-	strbuf_add_absolute_path(&full_template, template);
+	strbuf_add_absolute_path(&full_template, filename_template);
 	tempfile = mks_tempfile_m(full_template.buf, mode);
 	if (!tempfile)
 		die_errno("Unable to create temporary file '%s'",
@@ -279,7 +279,7 @@ int reopen_tempfile(struct tempfile *tempfile)
 		BUG("reopen_tempfile called for an inactive object");
 	if (0 <= tempfile->fd)
 		BUG("reopen_tempfile called for an open object");
-	tempfile->fd = open(tempfile->filename.buf, O_WRONLY);
+	tempfile->fd = open(tempfile->filename.buf, O_WRONLY|O_TRUNC);
 	return tempfile->fd;
 }
 

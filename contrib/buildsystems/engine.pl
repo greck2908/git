@@ -343,15 +343,15 @@ sub handleLinkLine
         } elsif ("$part" eq "-lz") {
             push(@libs, "zlib.lib");
         } elsif ("$part" eq "-lcrypto") {
-            push(@libs, "libeay32.lib");
+            push(@libs, "libcrypto.lib");
         } elsif ("$part" eq "-lssl") {
-            push(@libs, "ssleay32.lib");
+            push(@libs, "libssl.lib");
         } elsif ("$part" eq "-lcurl") {
             push(@libs, "libcurl.lib");
         } elsif ("$part" eq "-lexpat") {
-            push(@libs, "expat.lib");
+            push(@libs, "libexpat.lib");
         } elsif ("$part" eq "-liconv") {
-            push(@libs, "libiconv.lib");
+            push(@libs, "iconv.lib");
         } elsif ($part =~ /^[-\/]/) {
             push(@lflags, $part);
         } elsif ($part =~ /\.(a|lib)$/) {

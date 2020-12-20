@@ -1,23 +1,28 @@
+#include "test-tool.h"
 #include "git-compat-util.h"
 
 #if defined(GIT_WINDOWS_NATIVE)
+#include "lazyload.h"
 
 static int cmd_sync(void)
 {
 	char Buffer[MAX_PATH];
 	DWORD dwRet;
-	char szVolumeAccessPath[] = "\\\\.\\X:";
+	char szVolumeAccessPath[] = "\\\\.\\XXXX:";
 	HANDLE hVolWrite;
-	int success = 0;
+	int success = 0, dos_drive_prefix;
 
 	dwRet = GetCurrentDirectory(MAX_PATH, Buffer);
 	if ((0 == dwRet) || (dwRet > MAX_PATH))
 		return error("Error getting current directory");
 
-	if ((Buffer[0] < 'A') || (Buffer[0] > 'Z'))
-		return error("Invalid drive letter '%c'", Buffer[0]);
+	dos_drive_prefix = has_dos_drive_prefix(Buffer);
+	if (!dos_drive_prefix)
+		return error("'%s': invalid drive letter", Buffer);
 
-	szVolumeAccessPath[4] = Buffer[0];
+	memcpy(szVolumeAccessPath, Buffer, dos_drive_prefix);
+	szVolumeAccessPath[dos_drive_prefix] = '\0';
+
 	hVolWrite = CreateFile(szVolumeAccessPath, GENERIC_READ | GENERIC_WRITE,
 		FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
 	if (INVALID_HANDLE_VALUE == hVolWrite)
@@ -81,8 +86,7 @@ static int cmd_dropcaches(void)
 {
 	HANDLE hProcess = GetCurrentProcess();
 	HANDLE hToken;
-	HMODULE ntdll;
-	DWORD(WINAPI *NtSetSystemInformation)(INT, PVOID, ULONG);
+	DECLARE_PROC_ADDR(ntdll.dll, DWORD, NtSetSystemInformation, INT, PVOID, ULONG);
 	SYSTEM_MEMORY_LIST_COMMAND command;
 	int status;
 
@@ -94,14 +98,8 @@ static int cmd_dropcaches(void)
 
 	CloseHandle(hToken);
 
-	ntdll = LoadLibrary("ntdll.dll");
-	if (!ntdll)
-		return error("Can't load ntdll.dll, wrong Windows version?");
-
-	NtSetSystemInformation =
-		(DWORD(WINAPI *)(INT, PVOID, ULONG))GetProcAddress(ntdll, "NtSetSystemInformation");
-	if (!NtSetSystemInformation)
-		return error("Can't get function addresses, wrong Windows version?");
+	if (!INIT_PROC_ADDR(NtSetSystemInformation))
+		return error("Could not find NtSetSystemInformation() function");
 
 	command = MemoryPurgeStandbyList;
 	status = NtSetSystemInformation(
@@ -113,8 +111,6 @@ static int cmd_dropcaches(void)
 		error("Insufficient privileges to purge the standby list, need admin access");
 	else if (status != STATUS_SUCCESS)
 		error("Unable to execute the memory list command %d", status);
-
-	FreeLibrary(ntdll);
 
 	return status;
 }
@@ -157,7 +153,7 @@ static int cmd_dropcaches(void)
 
 #endif
 
-int cmd_main(int argc, const char **argv)
+int cmd__drop_caches(int argc, const char **argv)
 {
 	cmd_sync();
 	return cmd_dropcaches();
