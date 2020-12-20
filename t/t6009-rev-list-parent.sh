@@ -31,7 +31,8 @@ test_expect_success setup '
 test_expect_success 'one is ancestor of others and should not be shown' '
 
 	git rev-list one --not four >result &&
-	test_must_be_empty result
+	>expect &&
+	test_cmp expect result
 
 '
 
@@ -143,7 +144,8 @@ test_expect_success 'ancestors with the same commit time' '
 		test_commit t$i
 	done &&
 	git rev-list t1^! --not t$i >result &&
-	test_must_be_empty result
+	>expect &&
+	test_cmp expect result
 '
 
 test_done

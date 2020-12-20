@@ -4,10 +4,6 @@ test_description='test git wire-protocol transition'
 
 TEST_NO_CREATE_REPO=1
 
-# This is a protocol-specific test.
-GIT_TEST_PROTOCOL_VERSION=0
-export GIT_TEST_PROTOCOL_VERSION
-
 . ./test-lib.sh
 
 # Test protocol v1 with 'git://' transport
@@ -293,7 +289,6 @@ test_expect_success 'push with http:// using protocol v1' '
 	grep "git< version 1" log
 '
 
-# DO NOT add non-httpd-specific tests here, because the last part of this
-# test script is only executed when httpd is available and enabled.
+stop_httpd
 
 test_done

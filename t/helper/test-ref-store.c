@@ -1,9 +1,6 @@
-#include "test-tool.h"
 #include "cache.h"
 #include "refs.h"
 #include "worktree.h"
-#include "object-store.h"
-#include "repository.h"
 
 static const char *notnull(const char *arg, const char *name)
 {
@@ -24,7 +21,7 @@ static const char **get_store(const char **argv, struct ref_store **refs)
 	if (!argv[0]) {
 		die("ref store required");
 	} else if (!strcmp(argv[0], "main")) {
-		*refs = get_main_ref_store(the_repository);
+		*refs = get_main_ref_store();
 	} else if (skip_prefix(argv[0], "submodule:", &gitdir)) {
 		struct strbuf sb = STRBUF_INIT;
 		int ret;
@@ -37,7 +34,7 @@ static const char **get_store(const char **argv, struct ref_store **refs)
 
 		*refs = get_submodule_ref_store(gitdir);
 	} else if (skip_prefix(argv[0], "worktree:", &gitdir)) {
-		struct worktree **p, **worktrees = get_worktrees();
+		struct worktree **p, **worktrees = get_worktrees(0);
 
 		for (p = worktrees; *p; p++) {
 			struct worktree *wt = *p;
@@ -233,7 +230,7 @@ static int cmd_update_ref(struct ref_store *refs, const char **argv)
 {
 	const char *msg = notnull(*argv++, "msg");
 	const char *refname = notnull(*argv++, "refname");
-	const char *new_sha1_buf = notnull(*argv++, "new-sha1");
+	const char *new_sha1_buf = notnull(*argv++, "old-sha1");
 	const char *old_sha1_buf = notnull(*argv++, "old-sha1");
 	unsigned int flags = arg_flags(*argv++, "flags");
 	struct object_id old_oid;
@@ -277,7 +274,7 @@ static struct command commands[] = {
 	{ NULL, NULL }
 };
 
-int cmd__ref_store(int argc, const char **argv)
+int cmd_main(int argc, const char **argv)
 {
 	struct ref_store *refs;
 	const char *func;

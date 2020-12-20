@@ -15,13 +15,9 @@ test_expect_success 'setup' '
 	echo bar content 1 >bar.bin &&
 	git add . &&
 	git commit -m one &&
-	foo1=$(git rev-parse --short HEAD:foo.bin) &&
-	bar1=$(git rev-parse --short HEAD:bar.bin) &&
 	echo foo content 2 >foo.bin &&
 	echo bar content 2 >bar.bin &&
 	git commit -a -m two &&
-	foo2=$(git rev-parse --short HEAD:foo.bin) &&
-	bar2=$(git rev-parse --short HEAD:bar.bin) &&
 	echo "*.bin diff=magic" >.gitattributes &&
 	git config diff.magic.textconv ./helper &&
 	git config diff.magic.cachetextconv true
@@ -29,14 +25,14 @@ test_expect_success 'setup' '
 
 cat >expect <<EOF
 diff --git a/bar.bin b/bar.bin
-index $bar1..$bar2 100644
+index fcf9166..28283d5 100644
 --- a/bar.bin
 +++ b/bar.bin
 @@ -1 +1 @@
 -converted: bar content 1
 +converted: bar content 2
 diff --git a/foo.bin b/foo.bin
-index $foo1..$foo2 100644
+index d5b9fe3..1345db2 100644
 --- a/foo.bin
 +++ b/foo.bin
 @@ -1 +1 @@
@@ -63,7 +59,7 @@ test_expect_success 'cached textconv does not run helper' '
 
 cat >expect <<EOF
 diff --git a/bar.bin b/bar.bin
-index $bar1..$bar2 100644
+index fcf9166..28283d5 100644
 --- a/bar.bin
 +++ b/bar.bin
 @@ -1,2 +1,2 @@
@@ -71,7 +67,7 @@ index $bar1..$bar2 100644
 -converted: bar content 1
 +converted: bar content 2
 diff --git a/foo.bin b/foo.bin
-index $foo1..$foo2 100644
+index d5b9fe3..1345db2 100644
 --- a/foo.bin
 +++ b/foo.bin
 @@ -1,2 +1,2 @@
@@ -88,7 +84,7 @@ test_expect_success 'changing textconv invalidates cache' '
 
 cat >expect <<EOF
 diff --git a/bar.bin b/bar.bin
-index $bar1..$bar2 100644
+index fcf9166..28283d5 100644
 --- a/bar.bin
 +++ b/bar.bin
 @@ -1,2 +1,2 @@
@@ -96,7 +92,7 @@ index $bar1..$bar2 100644
 -converted: bar content 1
 +converted: bar content 2
 diff --git a/foo.bin b/foo.bin
-index $foo1..$foo2 100644
+index d5b9fe3..1345db2 100644
 --- a/foo.bin
 +++ b/foo.bin
 @@ -1 +1 @@

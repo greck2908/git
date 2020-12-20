@@ -88,8 +88,9 @@ test_expect_success 'non-qualified update in subdir updates from the root' '
 		echo even more >>sub2 &&
 		git add -u
 	) &&
+	: >expect &&
 	git diff-files --name-only >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 '
 
 test_expect_success 'replace a file with a symlink' '
@@ -179,8 +180,7 @@ test_expect_success 'add -u resolves unmerged paths' '
 
 test_expect_success '"add -u non-existent" should fail' '
 	test_must_fail git add -u non-existent &&
-	git ls-files >actual &&
-	! grep "non-existent" actual
+	! (git ls-files | grep "non-existent")
 '
 
 test_done

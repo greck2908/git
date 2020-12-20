@@ -110,30 +110,31 @@ test_expect_success \
 
 test_expect_success \
     'only consecutive blank lines should be completely removed' '
+    > expect &&
 
     printf "\n" | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     printf "\n\n\n" | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     printf "$sss\n$sss\n$sss\n" | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     printf "$sss$sss\n$sss\n\n" | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     printf "\n$sss\n$sss$sss\n" | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     printf "$sss$sss$sss$sss\n\n\n" | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     printf "\n$sss$sss$sss$sss\n\n" | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     printf "\n\n$sss$sss$sss$sss\n" | git stripspace >actual &&
-    test_must_be_empty actual
+    test_cmp expect actual
 '
 
 test_expect_success \
@@ -320,20 +321,22 @@ test_expect_success \
 
 test_expect_success \
     'spaces with newline at end should be replaced with empty string' '
+    printf "" >expect &&
+
     echo | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     echo "$sss" | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     echo "$sss$sss" | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     echo "$sss$sss$sss" | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     echo "$sss$sss$sss$sss" | git stripspace >actual &&
-    test_must_be_empty actual
+    test_cmp expect actual
 '
 
 test_expect_success \
@@ -347,17 +350,19 @@ test_expect_success \
 
 test_expect_success \
     'spaces without newline at end should be replaced with empty string' '
+    printf "" >expect &&
+
     printf "" | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     printf "$sss$sss" | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     printf "$sss$sss$sss" | git stripspace >actual &&
-    test_must_be_empty actual &&
+    test_cmp expect actual &&
 
     printf "$sss$sss$sss$sss" | git stripspace >actual &&
-    test_must_be_empty actual
+    test_cmp expect actual
 '
 
 test_expect_success \
@@ -430,15 +435,9 @@ test_expect_success '-c with changed comment char' '
 test_expect_success '-c with comment char defined in .git/config' '
 	test_config core.commentchar = &&
 	printf "= foo\n" >expect &&
-	rm -fr sub &&
-	mkdir sub &&
-	printf "foo" | git -C sub stripspace -c >actual &&
-	test_cmp expect actual
-'
-
-test_expect_success '-c outside git repository' '
-	printf "# foo\n" >expect &&
-	printf "foo" | nongit git stripspace -c >actual &&
+	printf "foo" | (
+		mkdir sub && cd sub && git stripspace -c
+	) >actual &&
 	test_cmp expect actual
 '
 

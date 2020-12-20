@@ -98,16 +98,6 @@ test_expect_success 'safecrlf: git diff demotes safecrlf=true to warn' '
 '
 
 
-test_expect_success 'safecrlf: no warning with safecrlf=false' '
-	git config core.autocrlf input &&
-	git config core.safecrlf false &&
-
-	for w in I am all CRLF; do echo $w; done | append_cr >allcrlf &&
-	git add allcrlf 2>err &&
-	test_must_be_empty err
-'
-
-
 test_expect_success 'switch off autocrlf, safecrlf, reset HEAD' '
 	git config core.autocrlf false &&
 	git config core.safecrlf false &&
@@ -159,8 +149,8 @@ test_expect_success 'checkout with autocrlf=input' '
 	rm -f tmp one dir/two three &&
 	git config core.autocrlf input &&
 	git read-tree --reset -u HEAD &&
-	! has_cr one &&
-	! has_cr dir/two &&
+	test_must_fail has_cr one &&
+	test_must_fail has_cr two &&
 	git update-index -- one dir/two &&
 	test "$one" = $(git hash-object --stdin <one) &&
 	test "$two" = $(git hash-object --stdin <dir/two) &&
@@ -237,9 +227,9 @@ test_expect_success '.gitattributes says two is binary' '
 	git config core.autocrlf true &&
 	git read-tree --reset -u HEAD &&
 
-	! has_cr dir/two &&
+	test_must_fail has_cr dir/two &&
 	verbose has_cr one &&
-	! has_cr three
+	test_must_fail has_cr three
 '
 
 test_expect_success '.gitattributes says two is input' '
@@ -248,7 +238,7 @@ test_expect_success '.gitattributes says two is input' '
 	echo "two crlf=input" >.gitattributes &&
 	git read-tree --reset -u HEAD &&
 
-	! has_cr dir/two
+	test_must_fail has_cr dir/two
 '
 
 test_expect_success '.gitattributes says two and three are text' '
@@ -270,7 +260,7 @@ test_expect_success 'in-tree .gitattributes (1)' '
 	rm -rf tmp one dir .gitattributes patch.file three &&
 	git read-tree --reset -u HEAD &&
 
-	! has_cr one &&
+	test_must_fail has_cr one &&
 	verbose has_cr three
 '
 
@@ -280,7 +270,7 @@ test_expect_success 'in-tree .gitattributes (2)' '
 	git read-tree --reset HEAD &&
 	git checkout-index -f -q -u -a &&
 
-	! has_cr one &&
+	test_must_fail has_cr one &&
 	verbose has_cr three
 '
 
@@ -291,7 +281,7 @@ test_expect_success 'in-tree .gitattributes (3)' '
 	git checkout-index -u .gitattributes &&
 	git checkout-index -u one dir/two three &&
 
-	! has_cr one &&
+	test_must_fail has_cr one &&
 	verbose has_cr three
 '
 
@@ -302,7 +292,7 @@ test_expect_success 'in-tree .gitattributes (4)' '
 	git checkout-index -u one dir/two three &&
 	git checkout-index -u .gitattributes &&
 
-	! has_cr one &&
+	test_must_fail has_cr one &&
 	verbose has_cr three
 '
 

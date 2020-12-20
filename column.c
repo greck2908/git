@@ -21,9 +21,20 @@ struct column_data {
 };
 
 /* return length of 's' in letters, ANSI escapes stripped */
-static int item_length(const char *s)
+static int item_length(unsigned int colopts, const char *s)
 {
-	return utf8_strnwidth(s, -1, 1);
+	int len, i = 0;
+	struct strbuf str = STRBUF_INIT;
+
+	strbuf_addstr(&str, s);
+	while ((s = strstr(str.buf + i, "\033[")) != NULL) {
+		int len = strspn(s + 2, "0123456789;");
+		i = s - str.buf;
+		strbuf_remove(&str, i, len + 3); /* \033[<len><func char> */
+	}
+	len = utf8_strwidth(str.buf);
+	strbuf_release(&str);
+	return len;
 }
 
 /*
@@ -107,7 +118,7 @@ static void display_plain(const struct string_list *list,
 		printf("%s%s%s", indent, list->items[i].string, nl);
 }
 
-/* Print a cell to stdout with all necessary leading/trailing space */
+/* Print a cell to stdout with all necessary leading/traling space */
 static int display_cell(struct column_data *data, int initial_width,
 			const char *empty_cell, int x, int y)
 {
@@ -156,7 +167,7 @@ static void display_table(const struct string_list *list,
 
 	ALLOC_ARRAY(data.len, list->nr);
 	for (i = 0; i < list->nr; i++)
-		data.len[i] = item_length(list->items[i].string);
+		data.len[i] = item_length(colopts, list->items[i].string);
 
 	layout(&data, &initial_width);
 
@@ -203,7 +214,7 @@ void print_columns(const struct string_list *list, unsigned int colopts,
 		display_table(list, colopts, &nopts);
 		break;
 	default:
-		BUG("invalid layout mode %d", COL_LAYOUT(colopts));
+		die("BUG: invalid layout mode %d", COL_LAYOUT(colopts));
 	}
 }
 
@@ -358,7 +369,7 @@ static struct child_process column_process = CHILD_PROCESS_INIT;
 
 int run_column_filter(int colopts, const struct column_options *opts)
 {
-	struct strvec *argv;
+	struct argv_array *argv;
 
 	if (fd_out != -1)
 		return -1;
@@ -366,14 +377,14 @@ int run_column_filter(int colopts, const struct column_options *opts)
 	child_process_init(&column_process);
 	argv = &column_process.args;
 
-	strvec_push(argv, "column");
-	strvec_pushf(argv, "--raw-mode=%d", colopts);
+	argv_array_push(argv, "column");
+	argv_array_pushf(argv, "--raw-mode=%d", colopts);
 	if (opts && opts->width)
-		strvec_pushf(argv, "--width=%d", opts->width);
+		argv_array_pushf(argv, "--width=%d", opts->width);
 	if (opts && opts->indent)
-		strvec_pushf(argv, "--indent=%s", opts->indent);
+		argv_array_pushf(argv, "--indent=%s", opts->indent);
 	if (opts && opts->padding)
-		strvec_pushf(argv, "--padding=%d", opts->padding);
+		argv_array_pushf(argv, "--padding=%d", opts->padding);
 
 	fflush(stdout);
 	column_process.in = -1;

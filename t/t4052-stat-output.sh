@@ -19,75 +19,51 @@ test_expect_success 'preparation' '
 	git commit -m message "$name"
 '
 
-cat >expect72 <<-'EOF'
- ...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 1 +
-EOF
-test_expect_success "format-patch: small change with long name gives more space to the name" '
-	git format-patch -1 --stdout >output &&
-	grep " | " output >actual &&
-	test_cmp expect72 actual
-'
-
 while read cmd args
 do
-	cat >expect80 <<-'EOF'
+	cat >expect <<-'EOF'
 	 ...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 1 +
 	EOF
 	test_expect_success "$cmd: small change with long name gives more space to the name" '
 		git $cmd $args >output &&
 		grep " | " output >actual &&
-		test_cmp expect80 actual
+		test_cmp expect actual
 	'
-done <<\EOF
-diff HEAD^ HEAD --stat
-show --stat
-log -1 --stat
-EOF
 
-cat >expect.60 <<-'EOF'
- ...aaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 1 +
-EOF
-cat >expect.6030 <<-'EOF'
- ...aaaaaaaaaaaaaaaaaaaaaaaaaaa | 1 +
-EOF
-cat >expect2.60 <<-'EOF'
- ...aaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 1 +
- ...aaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 1 +
-EOF
-cat >expect2.6030 <<-'EOF'
- ...aaaaaaaaaaaaaaaaaaaaaaaaaaa | 1 +
- ...aaaaaaaaaaaaaaaaaaaaaaaaaaa | 1 +
-EOF
-while read expect cmd args
-do
+	cat >expect <<-'EOF'
+	 ...aaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 1 +
+	EOF
 	test_expect_success "$cmd --stat=width: a long name is given more room when the bar is short" '
 		git $cmd $args --stat=40 >output &&
 		grep " | " output >actual &&
-		test_cmp $expect.60 actual
+		test_cmp expect actual
 	'
 
 	test_expect_success "$cmd --stat-width=width with long name" '
 		git $cmd $args --stat-width=40 >output &&
 		grep " | " output >actual &&
-		test_cmp $expect.60 actual
+		test_cmp expect actual
 	'
 
+	cat >expect <<-'EOF'
+	 ...aaaaaaaaaaaaaaaaaaaaaaaaaaa | 1 +
+	EOF
 	test_expect_success "$cmd --stat=...,name-width with long name" '
 		git $cmd $args --stat=60,30 >output &&
 		grep " | " output >actual &&
-		test_cmp $expect.6030 actual
+		test_cmp expect actual
 	'
 
 	test_expect_success "$cmd --stat-name-width with long name" '
 		git $cmd $args --stat-name-width=30 >output &&
 		grep " | " output >actual &&
-		test_cmp $expect.6030 actual
+		test_cmp expect actual
 	'
 done <<\EOF
-expect2 format-patch --cover-letter -1 --stdout
-expect diff HEAD^ HEAD --stat
-expect show --stat
-expect log -1 --stat
+format-patch -1 --stdout
+diff HEAD^ HEAD --stat
+show --stat
+log -1 --stat
 EOF
 
 
@@ -103,21 +79,11 @@ test_expect_success 'preparation for big change tests' '
 	git commit -m message abcd
 '
 
-cat >expect72 <<'EOF'
- abcd | 1000 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- abcd | 1000 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+cat >expect80 <<'EOF'
+ abcd | 1000 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 EOF
-test_expect_success "format-patch --cover-letter ignores COLUMNS (big change)" '
-	COLUMNS=200 git format-patch -1 --stdout --cover-letter >output &&
-	grep " | " output >actual &&
-	test_cmp expect72 actual
-'
-
-cat >expect72 <<'EOF'
- abcd | 1000 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-EOF
-cat >expect72-graph <<'EOF'
-|  abcd | 1000 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+cat >expect80-graph <<'EOF'
+|  abcd | 1000 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 EOF
 cat >expect200 <<'EOF'
  abcd | 1000 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -141,7 +107,7 @@ do
 		test_cmp "$expect-graph" actual
 	'
 done <<\EOF
-ignores expect72 format-patch -1 --stdout
+ignores expect80 format-patch -1 --stdout
 respects expect200 diff HEAD^ HEAD --stat
 respects expect200 show --stat
 respects expect200 log -1 --stat
@@ -169,7 +135,7 @@ do
 		test_cmp "$expect-graph" actual
 	'
 done <<\EOF
-ignores expect72 format-patch -1 --stdout
+ignores expect80 format-patch -1 --stdout
 respects expect40 diff HEAD^ HEAD --stat
 respects expect40 show --stat
 respects expect40 log -1 --stat
@@ -197,7 +163,7 @@ do
 		test_cmp "$expect-graph" actual
 	'
 done <<\EOF
-ignores expect72 format-patch -1 --stdout
+ignores expect80 format-patch -1 --stdout
 respects expect40 diff HEAD^ HEAD --stat
 respects expect40 show --stat
 respects expect40 log -1 --stat
@@ -284,11 +250,11 @@ show --stat
 log -1 --stat
 EOF
 
-cat >expect72 <<'EOF'
- ...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 1000 +++++++++++++++++
+cat >expect80 <<'EOF'
+ ...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 1000 ++++++++++++++++++++
 EOF
-cat >expect72-graph <<'EOF'
-|  ...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 1000 +++++++++++++++++
+cat >expect80-graph <<'EOF'
+|  ...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 1000 ++++++++++++++++++++
 EOF
 cat >expect200 <<'EOF'
  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 1000 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -312,7 +278,7 @@ do
 		test_cmp "$expect-graph" actual
 	'
 done <<\EOF
-ignores expect72 format-patch -1 --stdout
+ignores expect80 format-patch -1 --stdout
 respects expect200 diff HEAD^ HEAD --stat
 respects expect200 show --stat
 respects expect200 log -1 --stat
@@ -342,7 +308,7 @@ do
 		test_cmp "$expect-graph" actual
 	'
 done <<\EOF
-ignores expect72 format-patch -1 --stdout
+ignores expect80 format-patch -1 --stdout
 respects expect1 diff HEAD^ HEAD --stat
 respects expect1 show --stat
 respects expect1 log -1 --stat

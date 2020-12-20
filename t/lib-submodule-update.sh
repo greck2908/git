@@ -139,12 +139,12 @@ create_lib_submodule_repo () {
 		git revert HEAD &&
 
 		git checkout -b invalid_sub1 add_sub1 &&
-		git update-index --cacheinfo 160000 $(test_oid numeric) sub1 &&
+		git update-index --cacheinfo 160000 0123456789012345678901234567890123456789 sub1 &&
 		git commit -m "Invalid sub1 commit" &&
 		git checkout -b valid_sub1 &&
 		git revert HEAD &&
 
-		git checkout "${GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME-master}"
+		git checkout master
 	)
 }
 
@@ -183,7 +183,7 @@ test_git_directory_is_unchanged () {
 	)
 }
 
-test_git_directory_exists () {
+test_git_directory_exists() {
 	test -e ".git/modules/$1" &&
 	if test -f sub1/.git
 	then
@@ -235,7 +235,7 @@ reset_work_tree_to_interested () {
 	then
 		mkdir -p submodule_update/.git/modules/sub1/modules &&
 		cp -r submodule_update_repo/.git/modules/sub1/modules/sub2 submodule_update/.git/modules/sub1/modules/sub2
-		# core.worktree is unset for sub2 as it is not checked out
+		GIT_WORK_TREE=. git -C submodule_update/.git/modules/sub1/modules/sub2 config --unset core.worktree
 	fi &&
 	# indicate we are interested in the submodule:
 	git -C submodule_update config submodule.sub1.url "bogus" &&
@@ -296,23 +296,19 @@ test_submodule_content () {
 # - Directory containing tracked files replaced by submodule
 # - Submodule replaced by tracked files in directory
 # - Submodule replaced by tracked file with the same name
-# - Tracked file replaced by submodule
+# - tracked file replaced by submodule
 #
 # The default is that submodule contents aren't changed until "git submodule
 # update" is run. And even then that command doesn't delete the work tree of
 # a removed submodule.
 #
-# The first argument of the callback function will be the name of the submodule.
-#
 # Removing a submodule containing a .git directory must fail even when forced
-# to protect the history! If we are testing this case, the second argument of
-# the callback function will be 'test_must_fail', else it will be the empty
-# string.
+# to protect the history!
 #
 
-# Internal function; use test_submodule_switch_func(), test_submodule_switch(),
-# or test_submodule_forced_switch() instead.
-test_submodule_switch_common () {
+# Internal function; use test_submodule_switch() or
+# test_submodule_forced_switch() instead.
+test_submodule_switch_common() {
 	command="$1"
 	######################### Appearing submodule #########################
 	# Switching to a commit letting a submodule appear creates empty dir ...
@@ -446,7 +442,7 @@ test_submodule_switch_common () {
 		(
 			cd submodule_update &&
 			git branch -t replace_sub1_with_directory origin/replace_sub1_with_directory &&
-			$command replace_sub1_with_directory test_must_fail &&
+			test_must_fail $command replace_sub1_with_directory &&
 			test_superproject_content origin/add_sub1 &&
 			test_submodule_content sub1 origin/add_sub1
 		)
@@ -459,7 +455,7 @@ test_submodule_switch_common () {
 			cd submodule_update &&
 			git branch -t replace_sub1_with_directory origin/replace_sub1_with_directory &&
 			replace_gitfile_with_git_dir sub1 &&
-			$command replace_sub1_with_directory test_must_fail &&
+			test_must_fail $command replace_sub1_with_directory &&
 			test_superproject_content origin/add_sub1 &&
 			test_git_directory_is_unchanged sub1 &&
 			test_submodule_content sub1 origin/add_sub1
@@ -473,7 +469,7 @@ test_submodule_switch_common () {
 		(
 			cd submodule_update &&
 			git branch -t replace_sub1_with_file origin/replace_sub1_with_file &&
-			$command replace_sub1_with_file test_must_fail &&
+			test_must_fail $command replace_sub1_with_file &&
 			test_superproject_content origin/add_sub1 &&
 			test_submodule_content sub1 origin/add_sub1
 		)
@@ -487,7 +483,7 @@ test_submodule_switch_common () {
 			cd submodule_update &&
 			git branch -t replace_sub1_with_file origin/replace_sub1_with_file &&
 			replace_gitfile_with_git_dir sub1 &&
-			$command replace_sub1_with_file test_must_fail &&
+			test_must_fail $command replace_sub1_with_file &&
 			test_superproject_content origin/add_sub1 &&
 			test_git_directory_is_unchanged sub1 &&
 			test_submodule_content sub1 origin/add_sub1
@@ -562,28 +558,15 @@ test_submodule_switch_common () {
 # conditions, set the appropriate KNOWN_FAILURE_* variable used in the tests
 # below to 1.
 #
-# The first argument of the callback function will be the name of the submodule.
-#
-# Removing a submodule containing a .git directory must fail even when forced
-# to protect the history! If we are testing this case, the second argument of
-# the callback function will be 'test_must_fail', else it will be the empty
-# string.
-#
-# The following example uses `git some-command` as an example command to be
-# tested. It updates the worktree and index to match a target, but not any
-# submodule directories.
+# Use as follows:
 #
 # my_func () {
-#   ...prepare for `git some-command` to be run...
-#   $2 git some-command "$1" &&
-#   if test -n "$2"
-#   then
-#     return
-#   fi &&
-#   ...check the state after git some-command is run...
+#   target=$1
+#   # Do something here that updates the worktree and index to match target,
+#   # but not any submodule directories.
 # }
-# test_submodule_switch_func "my_func"
-test_submodule_switch_func () {
+# test_submodule_switch "my_func"
+test_submodule_switch () {
 	command="$1"
 	test_submodule_switch_common "$command"
 
@@ -596,33 +579,17 @@ test_submodule_switch_func () {
 			cd submodule_update &&
 			git branch -t add_sub1 origin/add_sub1 &&
 			>sub1 &&
-			$command add_sub1 test_must_fail &&
+			test_must_fail $command add_sub1 &&
 			test_superproject_content origin/no_submodule &&
 			test_must_be_empty sub1
 		)
 	'
 }
 
-# Ensures that the that the arg either contains "test_must_fail" or is empty.
-may_only_be_test_must_fail () {
-	test -z "$1" || test "$1" = test_must_fail || die
-}
-
-git_test_func () {
-	may_only_be_test_must_fail "$2" &&
-	$2 git $gitcmd "$1"
-}
-
-test_submodule_switch () {
-	gitcmd="$1"
-	test_submodule_switch_func "git_test_func"
-}
-
 # Same as test_submodule_switch(), except that throwing away local changes in
 # the superproject is allowed.
 test_submodule_forced_switch () {
-	gitcmd="$1"
-	command="git_test_func"
+	command="$1"
 	KNOWN_FAILURE_FORCED_SWITCH_TESTS=1
 	test_submodule_switch_common "$command"
 
@@ -653,18 +620,16 @@ test_submodule_forced_switch () {
 # - Directory containing tracked files replaced by submodule
 # - Submodule replaced by tracked files in directory
 # - Submodule replaced by tracked file with the same name
-# - Tracked file replaced by submodule
+# - tracked file replaced by submodule
 #
 # New test cases
 # - Removing a submodule with a git directory absorbs the submodules
 #   git directory first into the superproject.
-# - Switching from no submodule to nested submodules
-# - Switching from nested submodules to no submodule
 
 # Internal function; use test_submodule_switch_recursing_with_args() or
 # test_submodule_forced_switch_recursing_with_args() instead.
-test_submodule_recursing_with_args_common () {
-	command="$1 --recurse-submodules"
+test_submodule_recursing_with_args_common() {
+	command="$1"
 
 	######################### Appearing submodule #########################
 	# Switching to a commit letting a submodule appear checks it out ...
@@ -692,6 +657,22 @@ test_submodule_recursing_with_args_common () {
 			test_submodule_content sub1 origin/add_sub1
 		)
 	'
+	test_expect_success "$command: submodule branch is not changed, detach HEAD instead" '
+		prolog &&
+		reset_work_tree_to_interested add_sub1 &&
+		(
+			cd submodule_update &&
+			git -C sub1 checkout -b keep_branch &&
+			git -C sub1 rev-parse HEAD >expect &&
+			git branch -t check-keep origin/modify_sub1 &&
+			$command check-keep &&
+			test_superproject_content origin/modify_sub1 &&
+			test_submodule_content sub1 origin/modify_sub1 &&
+			git -C sub1 rev-parse keep_branch >actual &&
+			test_cmp expect actual &&
+			test_must_fail git -C sub1 symbolic-ref HEAD
+		)
+	'
 
 	# Replacing a tracked file with a submodule produces a checked out submodule
 	test_expect_success "$command: replace tracked file with submodule checks out submodule" '
@@ -717,19 +698,6 @@ test_submodule_recursing_with_args_common () {
 			test_submodule_content sub1 origin/replace_directory_with_sub1
 		)
 	'
-	# Switching to a commit with nested submodules recursively checks them out
-	test_expect_success "$command: nested submodules are checked out" '
-		prolog &&
-		reset_work_tree_to_interested no_submodule &&
-		(
-			cd submodule_update &&
-			git branch -t modify_sub1_recursively origin/modify_sub1_recursively &&
-			$command modify_sub1_recursively &&
-			test_superproject_content origin/modify_sub1_recursively &&
-			test_submodule_content sub1 origin/modify_sub1_recursively &&
-			test_submodule_content -C sub1 sub2 origin/modify_sub1_recursively
-		)
-	'
 
 	######################## Disappearing submodule #######################
 	# Removing a submodule removes its work tree ...
@@ -741,8 +709,7 @@ test_submodule_recursing_with_args_common () {
 			git branch -t remove_sub1 origin/remove_sub1 &&
 			$command remove_sub1 &&
 			test_superproject_content origin/remove_sub1 &&
-			! test -e sub1 &&
-			test_must_fail git config -f .git/modules/sub1/config core.worktree
+			! test -e sub1
 		)
 	'
 	# ... absorbing a .git directory along the way.
@@ -788,23 +755,8 @@ test_submodule_recursing_with_args_common () {
 			: >sub1/untrackedfile &&
 			test_must_fail $command replace_sub1_with_file &&
 			test_superproject_content origin/add_sub1 &&
-			test_submodule_content sub1 origin/add_sub1 &&
+			test_submodule_content sub1 origin/add_sub1
 			test -f sub1/untracked_file
-		)
-	'
-
-	# Switching to a commit without nested submodules removes their worktrees
-	test_expect_success "$command: worktrees of nested submodules are removed" '
-		prolog &&
-		reset_work_tree_to_interested add_nested_sub &&
-		(
-			cd submodule_update &&
-			git branch -t no_submodule origin/no_submodule &&
-			$command no_submodule &&
-			test_superproject_content origin/no_submodule &&
-			! test_path_is_dir sub1 &&
-			test_must_fail git config -f .git/modules/sub1/config core.worktree &&
-			test_must_fail git config -f .git/modules/sub1/modules/sub2/config core.worktree
 		)
 	'
 
@@ -829,27 +781,9 @@ test_submodule_recursing_with_args_common () {
 		(
 			cd submodule_update &&
 			git branch -t invalid_sub1 origin/invalid_sub1 &&
-			test_must_fail $command invalid_sub1 2>err &&
-			test_i18ngrep sub1 err &&
+			test_must_fail $command invalid_sub1 &&
 			test_superproject_content origin/add_sub1 &&
 			test_submodule_content sub1 origin/add_sub1
-		)
-	'
-	# Updating a submodule does not touch the currently checked out branch in the submodule
-	test_expect_success "$command: submodule branch is not changed, detach HEAD instead" '
-		prolog &&
-		reset_work_tree_to_interested add_sub1 &&
-		(
-			cd submodule_update &&
-			git -C sub1 checkout -b keep_branch &&
-			git -C sub1 rev-parse HEAD >expect &&
-			git branch -t modify_sub1 origin/modify_sub1 &&
-			$command modify_sub1 &&
-			test_superproject_content origin/modify_sub1 &&
-			test_submodule_content sub1 origin/modify_sub1 &&
-			git -C sub1 rev-parse keep_branch >actual &&
-			test_cmp expect actual &&
-			test_must_fail git -C sub1 symbolic-ref HEAD
 		)
 	'
 }
@@ -872,7 +806,7 @@ test_submodule_recursing_with_args_common () {
 # test_submodule_switch_recursing_with_args "$GIT_COMMAND"
 test_submodule_switch_recursing_with_args () {
 	cmd_args="$1"
-	command="git $cmd_args"
+	command="git $cmd_args --recurse-submodules"
 	test_submodule_recursing_with_args_common "$command"
 
 	RESULTDS=success
@@ -908,7 +842,7 @@ test_submodule_switch_recursing_with_args () {
 			cd submodule_update &&
 			git branch -t add_sub1 origin/add_sub1 &&
 			: >sub1 &&
-			echo sub1 >.git/info/exclude &&
+			echo sub1 >.git/info/exclude
 			$command add_sub1 &&
 			test_superproject_content origin/add_sub1 &&
 			test_submodule_content sub1 origin/add_sub1
@@ -951,7 +885,6 @@ test_submodule_switch_recursing_with_args () {
 		(
 			cd submodule_update &&
 			git branch -t replace_sub1_with_file origin/replace_sub1_with_file &&
-			echo ignored >.git/modules/sub1/info/exclude &&
 			: >sub1/ignored &&
 			$command replace_sub1_with_file &&
 			test_superproject_content origin/replace_sub1_with_file &&
@@ -971,6 +904,7 @@ test_submodule_switch_recursing_with_args () {
 		)
 	'
 
+	# recursing deeper than one level doesn't work yet.
 	test_expect_success "$command: modified submodule updates submodule recursively" '
 		prolog &&
 		reset_work_tree_to_interested add_nested_sub &&
@@ -989,7 +923,7 @@ test_submodule_switch_recursing_with_args () {
 # away local changes in the superproject is allowed.
 test_submodule_forced_switch_recursing_with_args () {
 	cmd_args="$1"
-	command="git $cmd_args"
+	command="git $cmd_args --recurse-submodules"
 	test_submodule_recursing_with_args_common "$command"
 
 	RESULT=success
@@ -1034,6 +968,7 @@ test_submodule_forced_switch_recursing_with_args () {
 			rm -rf .git/modules/sub1 &&
 			$command replace_sub1_with_directory &&
 			test_superproject_content origin/replace_sub1_with_directory &&
+			test_submodule_content sub1 origin/modify_sub1
 			test_git_directory_exists sub1
 		)
 	'
@@ -1077,20 +1012,6 @@ test_submodule_forced_switch_recursing_with_args () {
 			$command modify_sub1 &&
 			test_superproject_content origin/modify_sub1 &&
 			test_submodule_content sub1 origin/modify_sub1
-		)
-	'
-
-	test_expect_success "$command: changed submodule worktree is reset" '
-		prolog &&
-		reset_work_tree_to_interested add_sub1 &&
-		(
-			cd submodule_update &&
-			rm sub1/file1 &&
-			: >sub1/new_file &&
-			git -C sub1 add new_file &&
-			$command HEAD &&
-			test_path_is_file sub1/file1 &&
-			test_path_is_missing sub1/new_file
 		)
 	'
 }

@@ -9,12 +9,10 @@
 #include "tree.h"
 #include "progress.h"
 #include "fsck.h"
-#include "exec-cmd.h"
+#include "exec_cmd.h"
 #include "streaming.h"
 #include "thread-utils.h"
 #include "packfile.h"
-#include "object-store.h"
-#include "promisor-remote.h"
 
 static const char index_pack_usage[] =
 "git index-pack [-v] [-o <index-file>] [--keep | --keep=<msg>] [--verify] [--strict] (<pack-file> | --stdin [--fix-thin] [<pack-file>])";
@@ -33,65 +31,24 @@ struct object_stat {
 };
 
 struct base_data {
-	/* Initialized by make_base(). */
 	struct base_data *base;
+	struct base_data *child;
 	struct object_entry *obj;
-	int ref_first, ref_last;
-	int ofs_first, ofs_last;
-	/*
-	 * Threads should increment retain_data if they are about to call
-	 * patch_delta() using this struct's data as a base, and decrement this
-	 * when they are done. While retain_data is nonzero, this struct's data
-	 * will not be freed even if the delta base cache limit is exceeded.
-	 */
-	int retain_data;
-	/*
-	 * The number of direct children that have not been fully processed
-	 * (entered work_head, entered done_head, left done_head). When this
-	 * number reaches zero, this struct base_data can be freed.
-	 */
-	int children_remaining;
-
-	/* Not initialized by make_base(). */
-	struct list_head list;
 	void *data;
 	unsigned long size;
+	int ref_first, ref_last;
+	int ofs_first, ofs_last;
 };
 
-/*
- * Stack of struct base_data that have unprocessed children.
- * threaded_second_pass() uses this as a source of work (the other being the
- * objects array).
- *
- * Guarded by work_mutex.
- */
-static LIST_HEAD(work_head);
-
-/*
- * Stack of struct base_data that have children, all of whom have been
- * processed or are being processed, and at least one child is being processed.
- * These struct base_data must be kept around until the last child is
- * processed.
- *
- * Guarded by work_mutex.
- */
-static LIST_HEAD(done_head);
-
-/*
- * All threads share one delta base cache.
- *
- * base_cache_used is guarded by work_mutex, and base_cache_limit is read-only
- * in a thread.
- */
-static size_t base_cache_used;
-static size_t base_cache_limit;
-
 struct thread_local {
+#ifndef NO_PTHREADS
 	pthread_t thread;
+#endif
+	struct base_data *base_cache;
+	size_t base_cache_used;
 	int pack_fd;
 };
 
-/* Remember to update object flag allocation in object.h */
 #define FLAG_LINK (1u<<20)
 #define FLAG_CHECKED (1u<<21)
 
@@ -101,7 +58,7 @@ struct ofs_delta_entry {
 };
 
 struct ref_delta_entry {
-	struct object_id oid;
+	unsigned char sha1[20];
 	int obj_no;
 };
 
@@ -134,10 +91,12 @@ static unsigned int input_offset, input_len;
 static off_t consumed_bytes;
 static off_t max_input_size;
 static unsigned deepest_delta;
-static git_hash_ctx input_ctx;
+static git_SHA_CTX input_ctx;
 static uint32_t input_crc32;
 static int input_fd, output_fd;
 static const char *curr_pack;
+
+#ifndef NO_PTHREADS
 
 static struct thread_local *thread_data;
 static int nr_dispatched;
@@ -158,6 +117,10 @@ static pthread_mutex_t work_mutex;
 static pthread_mutex_t deepest_delta_mutex;
 #define deepest_delta_lock()	lock_mutex(&deepest_delta_mutex)
 #define deepest_delta_unlock()	unlock_mutex(&deepest_delta_mutex)
+
+static pthread_mutex_t type_cas_mutex;
+#define type_cas_lock()		lock_mutex(&type_cas_mutex)
+#define type_cas_unlock()	unlock_mutex(&type_cas_mutex)
 
 static pthread_key_t key;
 
@@ -182,6 +145,7 @@ static void init_thread(void)
 	init_recursive_mutex(&read_mutex);
 	pthread_mutex_init(&counter_mutex, NULL);
 	pthread_mutex_init(&work_mutex, NULL);
+	pthread_mutex_init(&type_cas_mutex, NULL);
 	if (show_stat)
 		pthread_mutex_init(&deepest_delta_mutex, NULL);
 	pthread_key_create(&key, NULL);
@@ -204,6 +168,7 @@ static void cleanup_thread(void)
 	pthread_mutex_destroy(&read_mutex);
 	pthread_mutex_destroy(&counter_mutex);
 	pthread_mutex_destroy(&work_mutex);
+	pthread_mutex_destroy(&type_cas_mutex);
 	if (show_stat)
 		pthread_mutex_destroy(&deepest_delta_mutex);
 	for (i = 0; i < nr_threads; i++)
@@ -211,6 +176,26 @@ static void cleanup_thread(void)
 	pthread_key_delete(key);
 	free(thread_data);
 }
+
+#else
+
+#define read_lock()
+#define read_unlock()
+
+#define counter_lock()
+#define counter_unlock()
+
+#define work_lock()
+#define work_unlock()
+
+#define deepest_delta_lock()
+#define deepest_delta_unlock()
+
+#define type_cas_lock()
+#define type_cas_unlock()
+
+#endif
+
 
 static int mark_link(struct object *obj, int type, void *data, struct fsck_options *options)
 {
@@ -236,14 +221,14 @@ static unsigned check_object(struct object *obj)
 
 	if (!(obj->flags & FLAG_CHECKED)) {
 		unsigned long size;
-		int type = oid_object_info(the_repository, &obj->oid, &size);
+		int type = sha1_object_info(obj->oid.hash, &size);
 		if (type <= 0)
 			die(_("did not receive expected object %s"),
 			      oid_to_hex(&obj->oid));
 		if (type != obj->type)
 			die(_("object %s: expected type %s, found %s"),
 			    oid_to_hex(&obj->oid),
-			    type_name(obj->type), type_name(type));
+			    typename(obj->type), typename(type));
 		obj->flags |= FLAG_CHECKED;
 		return 1;
 	}
@@ -256,16 +241,8 @@ static unsigned check_objects(void)
 	unsigned i, max, foreign_nr = 0;
 
 	max = get_max_object_index();
-
-	if (verbose)
-		progress = start_delayed_progress(_("Checking objects"), max);
-
-	for (i = 0; i < max; i++) {
+	for (i = 0; i < max; i++)
 		foreign_nr += check_object(get_indexed_object(i));
-		display_progress(progress, i + 1);
-	}
-
-	stop_progress(&progress);
 	return foreign_nr;
 }
 
@@ -276,7 +253,7 @@ static void flush(void)
 	if (input_offset) {
 		if (output_fd >= 0)
 			write_or_die(output_fd, input_buffer, input_offset);
-		the_hash_algo->update_fn(&input_ctx, input_buffer, input_offset);
+		git_SHA1_Update(&input_ctx, input_buffer, input_offset);
 		memmove(input_buffer, input_buffer + input_offset, input_len);
 		input_offset = 0;
 	}
@@ -349,7 +326,7 @@ static const char *open_pack_file(const char *pack_name)
 		output_fd = -1;
 		nothread_data.pack_fd = input_fd;
 	}
-	the_hash_algo->init_fn(&input_ctx);
+	git_SHA1_Init(&input_ctx);
 	return pack_name;
 }
 
@@ -385,57 +362,73 @@ static NORETURN void bad_object(off_t offset, const char *format, ...)
 
 static inline struct thread_local *get_thread_data(void)
 {
-	if (HAVE_THREADS) {
-		if (threads_active)
-			return pthread_getspecific(key);
-		assert(!threads_active &&
-		       "This should only be reached when all threads are gone");
-	}
+#ifndef NO_PTHREADS
+	if (threads_active)
+		return pthread_getspecific(key);
+	assert(!threads_active &&
+	       "This should only be reached when all threads are gone");
+#endif
 	return &nothread_data;
 }
 
+#ifndef NO_PTHREADS
 static void set_thread_data(struct thread_local *data)
 {
 	if (threads_active)
 		pthread_setspecific(key, data);
+}
+#endif
+
+static struct base_data *alloc_base_data(void)
+{
+	struct base_data *base = xcalloc(1, sizeof(struct base_data));
+	base->ref_last = -1;
+	base->ofs_last = -1;
+	return base;
 }
 
 static void free_base_data(struct base_data *c)
 {
 	if (c->data) {
 		FREE_AND_NULL(c->data);
-		base_cache_used -= c->size;
+		get_thread_data()->base_cache_used -= c->size;
 	}
 }
 
 static void prune_base_data(struct base_data *retain)
 {
-	struct list_head *pos;
-
-	if (base_cache_used <= base_cache_limit)
-		return;
-
-	list_for_each_prev(pos, &done_head) {
-		struct base_data *b = list_entry(pos, struct base_data, list);
-		if (b->retain_data || b == retain)
-			continue;
-		if (b->data) {
+	struct base_data *b;
+	struct thread_local *data = get_thread_data();
+	for (b = data->base_cache;
+	     data->base_cache_used > delta_base_cache_limit && b;
+	     b = b->child) {
+		if (b->data && b != retain)
 			free_base_data(b);
-			if (base_cache_used <= base_cache_limit)
-				return;
-		}
 	}
+}
 
-	list_for_each_prev(pos, &work_head) {
-		struct base_data *b = list_entry(pos, struct base_data, list);
-		if (b->retain_data || b == retain)
-			continue;
-		if (b->data) {
-			free_base_data(b);
-			if (base_cache_used <= base_cache_limit)
-				return;
-		}
-	}
+static void link_base_data(struct base_data *base, struct base_data *c)
+{
+	if (base)
+		base->child = c;
+	else
+		get_thread_data()->base_cache = c;
+
+	c->base = base;
+	c->child = NULL;
+	if (c->data)
+		get_thread_data()->base_cache_used += c->size;
+	prune_base_data(c);
+}
+
+static void unlink_base_data(struct base_data *c)
+{
+	struct base_data *base = c->base;
+	if (base)
+		base->child = NULL;
+	else
+		get_thread_data()->base_cache = NULL;
+	free_base_data(c);
 }
 
 static int is_delta_type(enum object_type type)
@@ -444,23 +437,22 @@ static int is_delta_type(enum object_type type)
 }
 
 static void *unpack_entry_data(off_t offset, unsigned long size,
-			       enum object_type type, struct object_id *oid)
+			       enum object_type type, unsigned char *sha1)
 {
 	static char fixed_buf[8192];
 	int status;
 	git_zstream stream;
 	void *buf;
-	git_hash_ctx c;
+	git_SHA_CTX c;
 	char hdr[32];
 	int hdrlen;
 
 	if (!is_delta_type(type)) {
-		hdrlen = xsnprintf(hdr, sizeof(hdr), "%s %"PRIuMAX,
-				   type_name(type),(uintmax_t)size) + 1;
-		the_hash_algo->init_fn(&c);
-		the_hash_algo->update_fn(&c, hdr, hdrlen);
+		hdrlen = xsnprintf(hdr, sizeof(hdr), "%s %lu", typename(type), size) + 1;
+		git_SHA1_Init(&c);
+		git_SHA1_Update(&c, hdr, hdrlen);
 	} else
-		oid = NULL;
+		sha1 = NULL;
 	if (type == OBJ_BLOB && size > big_file_threshold)
 		buf = fixed_buf;
 	else
@@ -477,8 +469,8 @@ static void *unpack_entry_data(off_t offset, unsigned long size,
 		stream.avail_in = input_len;
 		status = git_inflate(&stream, 0);
 		use(input_len - stream.avail_in);
-		if (oid)
-			the_hash_algo->update_fn(&c, last_out, stream.next_out - last_out);
+		if (sha1)
+			git_SHA1_Update(&c, last_out, stream.next_out - last_out);
 		if (buf == fixed_buf) {
 			stream.next_out = buf;
 			stream.avail_out = sizeof(fixed_buf);
@@ -487,15 +479,15 @@ static void *unpack_entry_data(off_t offset, unsigned long size,
 	if (stream.total_out != size || status != Z_STREAM_END)
 		bad_object(offset, _("inflate returned %d"), status);
 	git_inflate_end(&stream);
-	if (oid)
-		the_hash_algo->final_fn(oid->hash, &c);
+	if (sha1)
+		git_SHA1_Final(sha1, &c);
 	return buf == fixed_buf ? NULL : buf;
 }
 
 static void *unpack_raw_entry(struct object_entry *obj,
 			      off_t *ofs_offset,
-			      struct object_id *ref_oid,
-			      struct object_id *oid)
+			      unsigned char *ref_sha1,
+			      unsigned char *sha1)
 {
 	unsigned char *p;
 	unsigned long size, c;
@@ -523,8 +515,8 @@ static void *unpack_raw_entry(struct object_entry *obj,
 
 	switch (obj->type) {
 	case OBJ_REF_DELTA:
-		hashcpy(ref_oid->hash, fill(the_hash_algo->rawsz));
-		use(the_hash_algo->rawsz);
+		hashcpy(ref_sha1, fill(20));
+		use(20);
 		break;
 	case OBJ_OFS_DELTA:
 		p = fill(1);
@@ -554,7 +546,7 @@ static void *unpack_raw_entry(struct object_entry *obj,
 	}
 	obj->hdr_size = consumed_bytes - obj->idx.offset;
 
-	data = unpack_entry_data(obj->idx.offset, obj->size, obj->type, oid);
+	data = unpack_entry_data(obj->idx.offset, obj->size, obj->type, sha1);
 	obj->idx.crc32 = input_crc32;
 	return data;
 }
@@ -636,7 +628,7 @@ static int compare_ofs_delta_bases(off_t offset1, off_t offset2,
 	       0;
 }
 
-static int find_ofs_delta(const off_t offset)
+static int find_ofs_delta(const off_t offset, enum object_type type)
 {
 	int first = 0, last = nr_ofs_deltas;
 
@@ -646,8 +638,7 @@ static int find_ofs_delta(const off_t offset)
 		int cmp;
 
 		cmp = compare_ofs_delta_bases(offset, delta->offset,
-					      OBJ_OFS_DELTA,
-					      objects[delta->obj_no].type);
+					      type, objects[delta->obj_no].type);
 		if (!cmp)
 			return next;
 		if (cmp < 0) {
@@ -660,9 +651,10 @@ static int find_ofs_delta(const off_t offset)
 }
 
 static void find_ofs_delta_children(off_t offset,
-				    int *first_index, int *last_index)
+				    int *first_index, int *last_index,
+				    enum object_type type)
 {
-	int first = find_ofs_delta(offset);
+	int first = find_ofs_delta(offset, type);
 	int last = first;
 	int end = nr_ofs_deltas - 1;
 
@@ -679,18 +671,18 @@ static void find_ofs_delta_children(off_t offset,
 	*last_index = last;
 }
 
-static int compare_ref_delta_bases(const struct object_id *oid1,
-				   const struct object_id *oid2,
+static int compare_ref_delta_bases(const unsigned char *sha1,
+				   const unsigned char *sha2,
 				   enum object_type type1,
 				   enum object_type type2)
 {
 	int cmp = type1 - type2;
 	if (cmp)
 		return cmp;
-	return oidcmp(oid1, oid2);
+	return hashcmp(sha1, sha2);
 }
 
-static int find_ref_delta(const struct object_id *oid)
+static int find_ref_delta(const unsigned char *sha1, enum object_type type)
 {
 	int first = 0, last = nr_ref_deltas;
 
@@ -699,9 +691,8 @@ static int find_ref_delta(const struct object_id *oid)
 		struct ref_delta_entry *delta = &ref_deltas[next];
 		int cmp;
 
-		cmp = compare_ref_delta_bases(oid, &delta->oid,
-					      OBJ_REF_DELTA,
-					      objects[delta->obj_no].type);
+		cmp = compare_ref_delta_bases(sha1, delta->sha1,
+					      type, objects[delta->obj_no].type);
 		if (!cmp)
 			return next;
 		if (cmp < 0) {
@@ -713,10 +704,11 @@ static int find_ref_delta(const struct object_id *oid)
 	return -first-1;
 }
 
-static void find_ref_delta_children(const struct object_id *oid,
-				    int *first_index, int *last_index)
+static void find_ref_delta_children(const unsigned char *sha1,
+				    int *first_index, int *last_index,
+				    enum object_type type)
 {
-	int first = find_ref_delta(oid);
+	int first = find_ref_delta(sha1, type);
 	int last = first;
 	int end = nr_ref_deltas - 1;
 
@@ -725,9 +717,9 @@ static void find_ref_delta_children(const struct object_id *oid,
 		*last_index = -1;
 		return;
 	}
-	while (first > 0 && oideq(&ref_deltas[first - 1].oid, oid))
+	while (first > 0 && !hashcmp(ref_deltas[first - 1].sha1, sha1))
 		--first;
-	while (last < end && oideq(&ref_deltas[last + 1].oid, oid))
+	while (last < end && !hashcmp(ref_deltas[last + 1].sha1, sha1))
 		++last;
 	*first_index = first;
 	*last_index = last;
@@ -779,8 +771,7 @@ static int check_collison(struct object_entry *entry)
 
 	memset(&data, 0, sizeof(data));
 	data.entry = entry;
-	data.st = open_istream(the_repository, &entry->idx.oid, &type, &size,
-			       NULL);
+	data.st = open_istream(entry->idx.oid.hash, &type, &size, NULL);
 	if (!data.st)
 		return -1;
 	if (size != entry->size || type != entry->type)
@@ -804,7 +795,7 @@ static void sha1_object(const void *data, struct object_entry *obj_entry,
 	if (startup_info->have_repository) {
 		read_lock();
 		collision_test_needed =
-			has_object_file_with_flags(oid, OBJECT_INFO_QUICK);
+			has_sha1_file_with_flags(oid->hash, OBJECT_INFO_QUICK);
 		read_unlock();
 	}
 
@@ -819,12 +810,12 @@ static void sha1_object(const void *data, struct object_entry *obj_entry,
 		enum object_type has_type;
 		unsigned long has_size;
 		read_lock();
-		has_type = oid_object_info(the_repository, oid, &has_size);
+		has_type = sha1_object_info(oid->hash, &has_size);
 		if (has_type < 0)
 			die(_("cannot read existing object info %s"), oid_to_hex(oid));
 		if (has_type != type || has_size != size)
 			die(_("SHA1 COLLISION FOUND WITH %s !"), oid_to_hex(oid));
-		has_data = read_object_file(oid, &has_type, &has_size);
+		has_data = read_sha1_file(oid->hash, &has_type, &has_size);
 		read_unlock();
 		if (!data)
 			data = new_data = get_data_from_pack(obj_entry);
@@ -836,17 +827,14 @@ static void sha1_object(const void *data, struct object_entry *obj_entry,
 		free(has_data);
 	}
 
-	if (strict || do_fsck_object) {
+	if (strict) {
 		read_lock();
 		if (type == OBJ_BLOB) {
-			struct blob *blob = lookup_blob(the_repository, oid);
+			struct blob *blob = lookup_blob(oid);
 			if (blob)
 				blob->object.flags |= FLAG_CHECKED;
 			else
 				die(_("invalid blob object %s"), oid_to_hex(oid));
-			if (do_fsck_object &&
-			    fsck_object(&blob->object, (void *)data, size, &fsck_options))
-				die(_("fsck error in packed object"));
 		} else {
 			struct object *obj;
 			int eaten;
@@ -858,15 +846,14 @@ static void sha1_object(const void *data, struct object_entry *obj_entry,
 			 * we do not need to free the memory here, as the
 			 * buf is deleted by the caller.
 			 */
-			obj = parse_object_buffer(the_repository, oid, type,
-						  size, buf,
+			obj = parse_object_buffer(oid, type, size, buf,
 						  &eaten);
 			if (!obj)
-				die(_("invalid %s"), type_name(type));
+				die(_("invalid %s"), typename(type));
 			if (do_fsck_object &&
 			    fsck_object(obj, buf, size, &fsck_options))
-				die(_("fsck error in packed object"));
-			if (strict && fsck_walk(obj, NULL, &fsck_options))
+				die(_("Error in object"));
+			if (fsck_walk(obj, NULL, &fsck_options))
 				die(_("Not all child objects of %s are reachable"), oid_to_hex(&obj->oid));
 
 			if (obj->type == OBJ_TREE) {
@@ -877,7 +864,7 @@ static void sha1_object(const void *data, struct object_entry *obj_entry,
 			if (obj->type == OBJ_COMMIT) {
 				struct commit *commit = (struct commit *) obj;
 				if (detach_commit_buffer(commit, NULL) != data)
-					BUG("parse_object_buffer transmogrified our buffer");
+					die("BUG: parse_object_buffer transmogrified our buffer");
 			}
 			obj->flags |= FLAG_CHECKED;
 		}
@@ -888,15 +875,26 @@ static void sha1_object(const void *data, struct object_entry *obj_entry,
 }
 
 /*
- * Ensure that this node has been reconstructed and return its contents.
+ * This function is part of find_unresolved_deltas(). There are two
+ * walkers going in the opposite ways.
  *
- * In the typical and best case, this node would already be reconstructed
- * (through the invocation to resolve_delta() in threaded_second_pass()) and it
- * would not be pruned. However, if pruning of this node was necessary due to
- * reaching delta_base_cache_limit, this function will find the closest
- * ancestor with reconstructed data that has not been pruned (or if there is
- * none, the ultimate base object), and reconstruct each node in the delta
- * chain in order to generate the reconstructed data for this node.
+ * The first one in find_unresolved_deltas() traverses down from
+ * parent node to children, deflating nodes along the way. However,
+ * memory for deflated nodes is limited by delta_base_cache_limit, so
+ * at some point parent node's deflated content may be freed.
+ *
+ * The second walker is this function, which goes from current node up
+ * to top parent if necessary to deflate the node. In normal
+ * situation, its parent node would be already deflated, so it just
+ * needs to apply delta.
+ *
+ * In the worst case scenario, parent node is no longer deflated because
+ * we're running out of delta_base_cache_limit; we need to re-deflate
+ * parents, possibly up to the top base.
+ *
+ * All deflated objects here are subject to be freed if we exceed
+ * delta_base_cache_limit, just like in find_unresolved_deltas(), we
+ * just need to make sure the last node is not freed.
  */
 static void *get_base_data(struct base_data *c)
 {
@@ -913,7 +911,7 @@ static void *get_base_data(struct base_data *c)
 		if (!delta_nr) {
 			c->data = get_data_from_pack(obj);
 			c->size = obj->size;
-			base_cache_used += c->size;
+			get_thread_data()->base_cache_used += c->size;
 			prune_base_data(c);
 		}
 		for (; delta_nr > 0; delta_nr--) {
@@ -929,7 +927,7 @@ static void *get_base_data(struct base_data *c)
 			free(raw);
 			if (!c->data)
 				bad_object(obj->idx.offset, _("failed to apply delta"));
-			base_cache_used += c->size;
+			get_thread_data()->base_cache_used += c->size;
 			prune_base_data(c);
 		}
 		free(delta);
@@ -937,27 +935,10 @@ static void *get_base_data(struct base_data *c)
 	return c->data;
 }
 
-static struct base_data *make_base(struct object_entry *obj,
-				   struct base_data *parent)
+static void resolve_delta(struct object_entry *delta_obj,
+			  struct base_data *base, struct base_data *result)
 {
-	struct base_data *base = xcalloc(1, sizeof(struct base_data));
-	base->base = parent;
-	base->obj = obj;
-	find_ref_delta_children(&obj->idx.oid,
-				&base->ref_first, &base->ref_last);
-	find_ofs_delta_children(obj->idx.offset,
-				&base->ofs_first, &base->ofs_last);
-	base->children_remaining = base->ref_last - base->ref_first +
-		base->ofs_last - base->ofs_first + 2;
-	return base;
-}
-
-static struct base_data *resolve_delta(struct object_entry *delta_obj,
-				       struct base_data *base)
-{
-	void *delta_data, *result_data;
-	struct base_data *result;
-	unsigned long result_size;
+	void *base_data, *delta_data;
 
 	if (show_stat) {
 		int i = delta_obj - objects;
@@ -970,26 +951,114 @@ static struct base_data *resolve_delta(struct object_entry *delta_obj,
 		obj_stat[i].base_object_no = j;
 	}
 	delta_data = get_data_from_pack(delta_obj);
-	assert(base->data);
-	result_data = patch_delta(base->data, base->size,
-				  delta_data, delta_obj->size, &result_size);
+	base_data = get_base_data(base);
+	result->obj = delta_obj;
+	result->data = patch_delta(base_data, base->size,
+				   delta_data, delta_obj->size, &result->size);
 	free(delta_data);
-	if (!result_data)
+	if (!result->data)
 		bad_object(delta_obj->idx.offset, _("failed to apply delta"));
-	hash_object_file(the_hash_algo, result_data, result_size,
-			 type_name(delta_obj->real_type), &delta_obj->idx.oid);
-	sha1_object(result_data, NULL, result_size, delta_obj->real_type,
+	hash_sha1_file(result->data, result->size,
+		       typename(delta_obj->real_type),
+		       delta_obj->idx.oid.hash);
+	sha1_object(result->data, NULL, result->size, delta_obj->real_type,
 		    &delta_obj->idx.oid);
-
-	result = make_base(delta_obj, base);
-	result->data = result_data;
-	result->size = result_size;
-
 	counter_lock();
 	nr_resolved_deltas++;
 	counter_unlock();
+}
 
-	return result;
+/*
+ * Standard boolean compare-and-swap: atomically check whether "*type" is
+ * "want"; if so, swap in "set" and return true. Otherwise, leave it untouched
+ * and return false.
+ */
+static int compare_and_swap_type(signed char *type,
+				 enum object_type want,
+				 enum object_type set)
+{
+	enum object_type old;
+
+	type_cas_lock();
+	old = *type;
+	if (old == want)
+		*type = set;
+	type_cas_unlock();
+
+	return old == want;
+}
+
+static struct base_data *find_unresolved_deltas_1(struct base_data *base,
+						  struct base_data *prev_base)
+{
+	if (base->ref_last == -1 && base->ofs_last == -1) {
+		find_ref_delta_children(base->obj->idx.oid.hash,
+					&base->ref_first, &base->ref_last,
+					OBJ_REF_DELTA);
+
+		find_ofs_delta_children(base->obj->idx.offset,
+					&base->ofs_first, &base->ofs_last,
+					OBJ_OFS_DELTA);
+
+		if (base->ref_last == -1 && base->ofs_last == -1) {
+			free(base->data);
+			return NULL;
+		}
+
+		link_base_data(prev_base, base);
+	}
+
+	if (base->ref_first <= base->ref_last) {
+		struct object_entry *child = objects + ref_deltas[base->ref_first].obj_no;
+		struct base_data *result = alloc_base_data();
+
+		if (!compare_and_swap_type(&child->real_type, OBJ_REF_DELTA,
+					   base->obj->real_type))
+			die("BUG: child->real_type != OBJ_REF_DELTA");
+
+		resolve_delta(child, base, result);
+		if (base->ref_first == base->ref_last && base->ofs_last == -1)
+			free_base_data(base);
+
+		base->ref_first++;
+		return result;
+	}
+
+	if (base->ofs_first <= base->ofs_last) {
+		struct object_entry *child = objects + ofs_deltas[base->ofs_first].obj_no;
+		struct base_data *result = alloc_base_data();
+
+		assert(child->real_type == OBJ_OFS_DELTA);
+		child->real_type = base->obj->real_type;
+		resolve_delta(child, base, result);
+		if (base->ofs_first == base->ofs_last)
+			free_base_data(base);
+
+		base->ofs_first++;
+		return result;
+	}
+
+	unlink_base_data(base);
+	return NULL;
+}
+
+static void find_unresolved_deltas(struct base_data *base)
+{
+	struct base_data *new_base, *prev_base = NULL;
+	for (;;) {
+		new_base = find_unresolved_deltas_1(base, prev_base);
+
+		if (new_base) {
+			prev_base = base;
+			base = new_base;
+		} else {
+			free(base);
+			base = prev_base;
+			if (!base)
+				return;
+			prev_base = base->base;
+		}
+	}
 }
 
 static int compare_ofs_delta_entry(const void *a, const void *b)
@@ -1007,141 +1076,42 @@ static int compare_ref_delta_entry(const void *a, const void *b)
 	const struct ref_delta_entry *delta_a = a;
 	const struct ref_delta_entry *delta_b = b;
 
-	return oidcmp(&delta_a->oid, &delta_b->oid);
+	return hashcmp(delta_a->sha1, delta_b->sha1);
 }
 
+static void resolve_base(struct object_entry *obj)
+{
+	struct base_data *base_obj = alloc_base_data();
+	base_obj->obj = obj;
+	base_obj->data = NULL;
+	find_unresolved_deltas(base_obj);
+}
+
+#ifndef NO_PTHREADS
 static void *threaded_second_pass(void *data)
 {
-	if (data)
-		set_thread_data(data);
+	set_thread_data(data);
 	for (;;) {
-		struct base_data *parent = NULL;
-		struct object_entry *child_obj;
-		struct base_data *child;
-
+		int i;
 		counter_lock();
 		display_progress(progress, nr_resolved_deltas);
 		counter_unlock();
-
 		work_lock();
-		if (list_empty(&work_head)) {
-			/*
-			 * Take an object from the object array.
-			 */
-			while (nr_dispatched < nr_objects &&
-			       is_delta_type(objects[nr_dispatched].type))
-				nr_dispatched++;
-			if (nr_dispatched >= nr_objects) {
-				work_unlock();
-				break;
-			}
-			child_obj = &objects[nr_dispatched++];
-		} else {
-			/*
-			 * Peek at the top of the stack, and take a child from
-			 * it.
-			 */
-			parent = list_first_entry(&work_head, struct base_data,
-						  list);
-
-			if (parent->ref_first <= parent->ref_last) {
-				int offset = ref_deltas[parent->ref_first++].obj_no;
-				child_obj = objects + offset;
-				if (child_obj->real_type != OBJ_REF_DELTA)
-					die("REF_DELTA at offset %"PRIuMAX" already resolved (duplicate base %s?)",
-					    (uintmax_t) child_obj->idx.offset,
-					    oid_to_hex(&parent->obj->idx.oid));
-				child_obj->real_type = parent->obj->real_type;
-			} else {
-				child_obj = objects +
-					ofs_deltas[parent->ofs_first++].obj_no;
-				assert(child_obj->real_type == OBJ_OFS_DELTA);
-				child_obj->real_type = parent->obj->real_type;
-			}
-
-			if (parent->ref_first > parent->ref_last &&
-			    parent->ofs_first > parent->ofs_last) {
-				/*
-				 * This parent has run out of children, so move
-				 * it to done_head.
-				 */
-				list_del(&parent->list);
-				list_add(&parent->list, &done_head);
-			}
-
-			/*
-			 * Ensure that the parent has data, since we will need
-			 * it later.
-			 *
-			 * NEEDSWORK: If parent data needs to be reloaded, this
-			 * prolongs the time that the current thread spends in
-			 * the mutex. A mitigating factor is that parent data
-			 * needs to be reloaded only if the delta base cache
-			 * limit is exceeded, so in the typical case, this does
-			 * not happen.
-			 */
-			get_base_data(parent);
-			parent->retain_data++;
+		while (nr_dispatched < nr_objects &&
+		       is_delta_type(objects[nr_dispatched].type))
+			nr_dispatched++;
+		if (nr_dispatched >= nr_objects) {
+			work_unlock();
+			break;
 		}
+		i = nr_dispatched++;
 		work_unlock();
 
-		if (parent) {
-			child = resolve_delta(child_obj, parent);
-			if (!child->children_remaining)
-				FREE_AND_NULL(child->data);
-		} else {
-			child = make_base(child_obj, NULL);
-			if (child->children_remaining) {
-				/*
-				 * Since this child has its own delta children,
-				 * we will need this data in the future.
-				 * Inflate now so that future iterations will
-				 * have access to this object's data while
-				 * outside the work mutex.
-				 */
-				child->data = get_data_from_pack(child_obj);
-				child->size = child_obj->size;
-			}
-		}
-
-		work_lock();
-		if (parent)
-			parent->retain_data--;
-		if (child->data) {
-			/*
-			 * This child has its own children, so add it to
-			 * work_head.
-			 */
-			list_add(&child->list, &work_head);
-			base_cache_used += child->size;
-			prune_base_data(NULL);
-		} else {
-			/*
-			 * This child does not have its own children. It may be
-			 * the last descendant of its ancestors; free those
-			 * that we can.
-			 */
-			struct base_data *p = parent;
-
-			while (p) {
-				struct base_data *next_p;
-
-				p->children_remaining--;
-				if (p->children_remaining)
-					break;
-
-				next_p = p->base;
-				free_base_data(p);
-				list_del(&p->list);
-				free(p);
-
-				p = next_p;
-			}
-		}
-		work_unlock();
+		resolve_base(&objects[i]);
 	}
 	return NULL;
 }
+#endif
 
 /*
  * First pass:
@@ -1149,11 +1119,11 @@ static void *threaded_second_pass(void *data)
  * - calculate SHA1 of all non-delta objects;
  * - remember base (SHA1 or offset) for all deltas.
  */
-static void parse_pack_objects(unsigned char *hash)
+static void parse_pack_objects(unsigned char *sha1)
 {
 	int i, nr_delays = 0;
 	struct ofs_delta_entry *ofs_delta = ofs_deltas;
-	struct object_id ref_delta_oid;
+	unsigned char ref_delta_sha1[20];
 	struct stat st;
 
 	if (verbose)
@@ -1163,8 +1133,8 @@ static void parse_pack_objects(unsigned char *hash)
 	for (i = 0; i < nr_objects; i++) {
 		struct object_entry *obj = &objects[i];
 		void *data = unpack_raw_entry(obj, &ofs_delta->offset,
-					      &ref_delta_oid,
-					      &obj->idx.oid);
+					      ref_delta_sha1,
+					      obj->idx.oid.hash);
 		obj->real_type = obj->type;
 		if (obj->type == OBJ_OFS_DELTA) {
 			nr_ofs_deltas++;
@@ -1172,7 +1142,7 @@ static void parse_pack_objects(unsigned char *hash)
 			ofs_delta++;
 		} else if (obj->type == OBJ_REF_DELTA) {
 			ALLOC_GROW(ref_deltas, nr_ref_deltas + 1, ref_deltas_alloc);
-			oidcpy(&ref_deltas[nr_ref_deltas].oid, &ref_delta_oid);
+			hashcpy(ref_deltas[nr_ref_deltas].sha1, ref_delta_sha1);
 			ref_deltas[nr_ref_deltas].obj_no = i;
 			nr_ref_deltas++;
 		} else if (!data) {
@@ -1190,10 +1160,10 @@ static void parse_pack_objects(unsigned char *hash)
 
 	/* Check pack integrity */
 	flush();
-	the_hash_algo->final_fn(hash, &input_ctx);
-	if (!hasheq(fill(the_hash_algo->rawsz), hash))
+	git_SHA1_Final(sha1, &input_ctx);
+	if (hashcmp(fill(20), sha1))
 		die(_("pack is corrupted (SHA1 mismatch)"));
-	use(the_hash_algo->rawsz);
+	use(20);
 
 	/* If input_fd is a file, we should have reached its end now. */
 	if (fstat(input_fd, &st))
@@ -1238,8 +1208,8 @@ static void resolve_deltas(void)
 		progress = start_progress(_("Resolving deltas"),
 					  nr_ref_deltas + nr_ofs_deltas);
 
+#ifndef NO_PTHREADS
 	nr_dispatched = 0;
-	base_cache_limit = delta_base_cache_limit * nr_threads;
 	if (nr_threads > 1 || getenv("GIT_FORCE_THREADS")) {
 		init_thread();
 		for (i = 0; i < nr_threads; i++) {
@@ -1254,27 +1224,36 @@ static void resolve_deltas(void)
 		cleanup_thread();
 		return;
 	}
-	threaded_second_pass(&nothread_data);
+#endif
+
+	for (i = 0; i < nr_objects; i++) {
+		struct object_entry *obj = &objects[i];
+
+		if (is_delta_type(obj->type))
+			continue;
+		resolve_base(obj);
+		display_progress(progress, nr_resolved_deltas);
+	}
 }
 
 /*
  * Third pass:
  * - append objects to convert thin pack to full pack if required
- * - write the final pack hash
+ * - write the final 20-byte SHA-1
  */
-static void fix_unresolved_deltas(struct hashfile *f);
-static void conclude_pack(int fix_thin_pack, const char *curr_pack, unsigned char *pack_hash)
+static void fix_unresolved_deltas(struct sha1file *f);
+static void conclude_pack(int fix_thin_pack, const char *curr_pack, unsigned char *pack_sha1)
 {
 	if (nr_ref_deltas + nr_ofs_deltas == nr_resolved_deltas) {
 		stop_progress(&progress);
-		/* Flush remaining pack final hash. */
+		/* Flush remaining pack final 20-byte SHA1. */
 		flush();
 		return;
 	}
 
 	if (fix_thin_pack) {
-		struct hashfile *f;
-		unsigned char read_hash[GIT_MAX_RAWSZ], tail_hash[GIT_MAX_RAWSZ];
+		struct sha1file *f;
+		unsigned char read_sha1[20], tail_sha1[20];
 		struct strbuf msg = STRBUF_INIT;
 		int nr_unresolved = nr_ofs_deltas + nr_ref_deltas - nr_resolved_deltas;
 		int nr_objects_initial = nr_objects;
@@ -1283,7 +1262,7 @@ static void conclude_pack(int fix_thin_pack, const char *curr_pack, unsigned cha
 		REALLOC_ARRAY(objects, nr_objects + nr_unresolved + 1);
 		memset(objects + nr_objects + 1, 0,
 		       nr_unresolved * sizeof(*objects));
-		f = hashfd(output_fd, curr_pack);
+		f = sha1fd(output_fd, curr_pack);
 		fix_unresolved_deltas(f);
 		strbuf_addf(&msg, Q_("completed with %d local object",
 				     "completed with %d local objects",
@@ -1291,12 +1270,12 @@ static void conclude_pack(int fix_thin_pack, const char *curr_pack, unsigned cha
 			    nr_objects - nr_objects_initial);
 		stop_progress_msg(&progress, msg.buf);
 		strbuf_release(&msg);
-		finalize_hashfile(f, tail_hash, 0);
-		hashcpy(read_hash, pack_hash);
-		fixup_pack_header_footer(output_fd, pack_hash,
+		sha1close(f, tail_sha1, 0);
+		hashcpy(read_sha1, pack_sha1);
+		fixup_pack_header_footer(output_fd, pack_sha1,
 					 curr_pack, nr_objects,
-					 read_hash, consumed_bytes-the_hash_algo->rawsz);
-		if (!hasheq(read_hash, tail_hash))
+					 read_sha1, consumed_bytes-20);
+		if (hashcmp(read_sha1, tail_sha1) != 0)
 			die(_("Unexpected tail checksum for %s "
 			      "(disk corruption?)"), curr_pack);
 	}
@@ -1307,7 +1286,7 @@ static void conclude_pack(int fix_thin_pack, const char *curr_pack, unsigned cha
 		    nr_ofs_deltas + nr_ref_deltas - nr_resolved_deltas);
 }
 
-static int write_compressed(struct hashfile *f, void *in, unsigned int size)
+static int write_compressed(struct sha1file *f, void *in, unsigned int size)
 {
 	git_zstream stream;
 	int status;
@@ -1321,7 +1300,7 @@ static int write_compressed(struct hashfile *f, void *in, unsigned int size)
 		stream.next_out = outbuf;
 		stream.avail_out = sizeof(outbuf);
 		status = git_deflate(&stream, Z_FINISH);
-		hashwrite(f, outbuf, sizeof(outbuf) - stream.avail_out);
+		sha1write(f, outbuf, sizeof(outbuf) - stream.avail_out);
 	} while (status == Z_OK);
 
 	if (status != Z_STREAM_END)
@@ -1331,7 +1310,7 @@ static int write_compressed(struct hashfile *f, void *in, unsigned int size)
 	return size;
 }
 
-static struct object_entry *append_obj_to_pack(struct hashfile *f,
+static struct object_entry *append_obj_to_pack(struct sha1file *f,
 			       const unsigned char *sha1, void *buf,
 			       unsigned long size, enum object_type type)
 {
@@ -1348,7 +1327,7 @@ static struct object_entry *append_obj_to_pack(struct hashfile *f,
 	}
 	header[n++] = c;
 	crc32_begin(f);
-	hashwrite(f, header, n);
+	sha1write(f, header, n);
 	obj[0].size = size;
 	obj[0].hdr_size = n;
 	obj[0].type = type;
@@ -1356,7 +1335,7 @@ static struct object_entry *append_obj_to_pack(struct hashfile *f,
 	obj[1].idx.offset = obj[0].idx.offset + n;
 	obj[1].idx.offset += write_compressed(f, buf, size);
 	obj[0].idx.crc32 = crc32_end(f);
-	hashflush(f);
+	sha1flush(f);
 	hashcpy(obj->idx.oid.hash, sha1);
 	return obj;
 }
@@ -1368,7 +1347,7 @@ static int delta_pos_compare(const void *_a, const void *_b)
 	return a->obj_no - b->obj_no;
 }
 
-static void fix_unresolved_deltas(struct hashfile *f)
+static void fix_unresolved_deltas(struct sha1file *f)
 {
 	struct ref_delta_entry **sorted_by_pos;
 	int i;
@@ -1388,108 +1367,37 @@ static void fix_unresolved_deltas(struct hashfile *f)
 		sorted_by_pos[i] = &ref_deltas[i];
 	QSORT(sorted_by_pos, nr_ref_deltas, delta_pos_compare);
 
-	if (has_promisor_remote()) {
-		/*
-		 * Prefetch the delta bases.
-		 */
-		struct oid_array to_fetch = OID_ARRAY_INIT;
-		for (i = 0; i < nr_ref_deltas; i++) {
-			struct ref_delta_entry *d = sorted_by_pos[i];
-			if (!oid_object_info_extended(the_repository, &d->oid,
-						      NULL,
-						      OBJECT_INFO_FOR_PREFETCH))
-				continue;
-			oid_array_append(&to_fetch, &d->oid);
-		}
-		promisor_remote_get_direct(the_repository,
-					   to_fetch.oid, to_fetch.nr);
-		oid_array_clear(&to_fetch);
-	}
-
 	for (i = 0; i < nr_ref_deltas; i++) {
 		struct ref_delta_entry *d = sorted_by_pos[i];
 		enum object_type type;
-		void *data;
-		unsigned long size;
+		struct base_data *base_obj = alloc_base_data();
 
 		if (objects[d->obj_no].real_type != OBJ_REF_DELTA)
 			continue;
-		data = read_object_file(&d->oid, &type, &size);
-		if (!data)
+		base_obj->data = read_sha1_file(d->sha1, &type, &base_obj->size);
+		if (!base_obj->data)
 			continue;
 
-		if (check_object_signature(the_repository, &d->oid,
-					   data, size,
-					   type_name(type)))
-			die(_("local object %s is corrupt"), oid_to_hex(&d->oid));
-
-		/*
-		 * Add this as an object to the objects array and call
-		 * threaded_second_pass() (which will pick up the added
-		 * object).
-		 */
-		append_obj_to_pack(f, d->oid.hash, data, size, type);
-		threaded_second_pass(NULL);
-
+		if (check_sha1_signature(d->sha1, base_obj->data,
+				base_obj->size, typename(type)))
+			die(_("local object %s is corrupt"), sha1_to_hex(d->sha1));
+		base_obj->obj = append_obj_to_pack(f, d->sha1,
+					base_obj->data, base_obj->size, type);
+		find_unresolved_deltas(base_obj);
 		display_progress(progress, nr_resolved_deltas);
 	}
 	free(sorted_by_pos);
 }
 
-static const char *derive_filename(const char *pack_name, const char *suffix,
-				   struct strbuf *buf)
-{
-	size_t len;
-	if (!strip_suffix(pack_name, ".pack", &len))
-		die(_("packfile name '%s' does not end with '.pack'"),
-		    pack_name);
-	strbuf_add(buf, pack_name, len);
-	strbuf_addch(buf, '.');
-	strbuf_addstr(buf, suffix);
-	return buf->buf;
-}
-
-static void write_special_file(const char *suffix, const char *msg,
-			       const char *pack_name, const unsigned char *hash,
-			       const char **report)
-{
-	struct strbuf name_buf = STRBUF_INIT;
-	const char *filename;
-	int fd;
-	int msg_len = strlen(msg);
-
-	if (pack_name)
-		filename = derive_filename(pack_name, suffix, &name_buf);
-	else
-		filename = odb_pack_name(&name_buf, hash, suffix);
-
-	fd = odb_pack_keep(filename);
-	if (fd < 0) {
-		if (errno != EEXIST)
-			die_errno(_("cannot write %s file '%s'"),
-				  suffix, filename);
-	} else {
-		if (msg_len > 0) {
-			write_or_die(fd, msg, msg_len);
-			write_or_die(fd, "\n", 1);
-		}
-		if (close(fd) != 0)
-			die_errno(_("cannot close written %s file '%s'"),
-				  suffix, filename);
-		if (report)
-			*report = suffix;
-	}
-	strbuf_release(&name_buf);
-}
-
 static void final(const char *final_pack_name, const char *curr_pack_name,
 		  const char *final_index_name, const char *curr_index_name,
-		  const char *keep_msg, const char *promisor_msg,
-		  unsigned char *hash)
+		  const char *keep_name, const char *keep_msg,
+		  unsigned char *sha1)
 {
 	const char *report = "pack";
 	struct strbuf pack_name = STRBUF_INIT;
 	struct strbuf index_name = STRBUF_INIT;
+	struct strbuf keep_name_buf = STRBUF_INIT;
 	int err;
 
 	if (!from_stdin) {
@@ -1501,16 +1409,32 @@ static void final(const char *final_pack_name, const char *curr_pack_name,
 			die_errno(_("error while closing pack file"));
 	}
 
-	if (keep_msg)
-		write_special_file("keep", keep_msg, final_pack_name, hash,
-				   &report);
-	if (promisor_msg)
-		write_special_file("promisor", promisor_msg, final_pack_name,
-				   hash, NULL);
+	if (keep_msg) {
+		int keep_fd, keep_msg_len = strlen(keep_msg);
+
+		if (!keep_name)
+			keep_name = odb_pack_name(&keep_name_buf, sha1, "keep");
+
+		keep_fd = odb_pack_keep(keep_name);
+		if (keep_fd < 0) {
+			if (errno != EEXIST)
+				die_errno(_("cannot write keep file '%s'"),
+					  keep_name);
+		} else {
+			if (keep_msg_len > 0) {
+				write_or_die(keep_fd, keep_msg, keep_msg_len);
+				write_or_die(keep_fd, "\n", 1);
+			}
+			if (close(keep_fd) != 0)
+				die_errno(_("cannot close written keep file '%s'"),
+					  keep_name);
+			report = "keep";
+		}
+	}
 
 	if (final_pack_name != curr_pack_name) {
 		if (!final_pack_name)
-			final_pack_name = odb_pack_name(&pack_name, hash, "pack");
+			final_pack_name = odb_pack_name(&pack_name, sha1, "pack");
 		if (finalize_object_file(curr_pack_name, final_pack_name))
 			die(_("cannot store pack file"));
 	} else if (from_stdin)
@@ -1518,25 +1442,18 @@ static void final(const char *final_pack_name, const char *curr_pack_name,
 
 	if (final_index_name != curr_index_name) {
 		if (!final_index_name)
-			final_index_name = odb_pack_name(&index_name, hash, "idx");
+			final_index_name = odb_pack_name(&index_name, sha1, "idx");
 		if (finalize_object_file(curr_index_name, final_index_name))
 			die(_("cannot store index file"));
 	} else
 		chmod(final_index_name, 0444);
 
-	if (do_fsck_object) {
-		struct packed_git *p;
-		p = add_packed_git(final_index_name, strlen(final_index_name), 0);
-		if (p)
-			install_packed_git(the_repository, p);
-	}
-
 	if (!from_stdin) {
-		printf("%s\n", hash_to_hex(hash));
+		printf("%s\n", sha1_to_hex(sha1));
 	} else {
 		struct strbuf buf = STRBUF_INIT;
 
-		strbuf_addf(&buf, "%s\t%s\n", report, hash_to_hex(hash));
+		strbuf_addf(&buf, "%s\t%s\n", report, sha1_to_hex(sha1));
 		write_or_die(1, buf.buf, buf.len);
 		strbuf_release(&buf);
 
@@ -1555,6 +1472,7 @@ static void final(const char *final_pack_name, const char *curr_pack_name,
 
 	strbuf_release(&index_name);
 	strbuf_release(&pack_name);
+	strbuf_release(&keep_name_buf);
 }
 
 static int git_index_pack_config(const char *k, const char *v, void *cb)
@@ -1572,10 +1490,11 @@ static int git_index_pack_config(const char *k, const char *v, void *cb)
 		if (nr_threads < 0)
 			die(_("invalid number of threads specified (%d)"),
 			    nr_threads);
-		if (!HAVE_THREADS && nr_threads != 1) {
+#ifdef NO_PTHREADS
+		if (nr_threads != 1)
 			warning(_("no threads support, ignoring %s"), k);
-			nr_threads = 1;
-		}
+		nr_threads = 1;
+#endif
 		return 0;
 	}
 	return git_default_config(k, v, cb);
@@ -1596,8 +1515,11 @@ static void read_v2_anomalous_offsets(struct packed_git *p,
 	uint32_t i;
 
 	/* The address of the 4-byte offset table */
-	idx1 = (((const uint32_t *)((const uint8_t *)p->index_data + p->crc_offset))
-		+ (size_t)p->num_objects /* CRC32 table */
+	idx1 = (((const uint32_t *)p->index_data)
+		+ 2 /* 8-byte header */
+		+ 256 /* fan out */
+		+ 5 * p->num_objects /* 20-byte SHA-1 table */
+		+ p->num_objects /* CRC32 table */
 		);
 
 	/* The address of the 8-byte offset table */
@@ -1641,7 +1563,7 @@ static void read_idx_option(struct pack_idx_option *opts, const char *pack_name)
 	/*
 	 * Get rid of the idx file as we do not need it anymore.
 	 * NEEDSWORK: extract this bit from free_pack_by_name() in
-	 * sha1-file.c, perhaps?  It shouldn't matter very much as we
+	 * sha1_file.c, perhaps?  It shouldn't matter very much as we
 	 * know we haven't installed this pack (hence we never have
 	 * read anything from it).
 	 */
@@ -1664,10 +1586,10 @@ static void show_pack_info(int stat_only)
 			chain_histogram[obj_stat[i].delta_depth - 1]++;
 		if (stat_only)
 			continue;
-		printf("%s %-6s %"PRIuMAX" %"PRIuMAX" %"PRIuMAX,
+		printf("%s %-6s %lu %lu %"PRIuMAX,
 		       oid_to_hex(&obj->idx.oid),
-		       type_name(obj->real_type), (uintmax_t)obj->size,
-		       (uintmax_t)(obj[1].idx.offset - obj->idx.offset),
+		       typename(obj->real_type), obj->size,
+		       (unsigned long)(obj[1].idx.offset - obj->idx.offset),
 		       (uintmax_t)obj->idx.offset);
 		if (is_delta_type(obj->type)) {
 			struct object_entry *bobj = &objects[obj_stat[i].base_object_no];
@@ -1693,33 +1615,36 @@ static void show_pack_info(int stat_only)
 	}
 }
 
+static const char *derive_filename(const char *pack_name, const char *suffix,
+				   struct strbuf *buf)
+{
+	size_t len;
+	if (!strip_suffix(pack_name, ".pack", &len))
+		die(_("packfile name '%s' does not end with '.pack'"),
+		    pack_name);
+	strbuf_add(buf, pack_name, len);
+	strbuf_addstr(buf, suffix);
+	return buf->buf;
+}
+
 int cmd_index_pack(int argc, const char **argv, const char *prefix)
 {
 	int i, fix_thin_pack = 0, verify = 0, stat_only = 0;
 	const char *curr_index;
 	const char *index_name = NULL, *pack_name = NULL;
-	const char *keep_msg = NULL;
-	const char *promisor_msg = NULL;
-	struct strbuf index_name_buf = STRBUF_INIT;
+	const char *keep_name = NULL, *keep_msg = NULL;
+	struct strbuf index_name_buf = STRBUF_INIT,
+		      keep_name_buf = STRBUF_INIT;
 	struct pack_idx_entry **idx_objects;
 	struct pack_idx_option opts;
-	unsigned char pack_hash[GIT_MAX_RAWSZ];
+	unsigned char pack_sha1[20];
 	unsigned foreign_nr = 1;	/* zero is a "good" value, assume bad */
 	int report_end_of_input = 0;
-	int hash_algo = 0;
-
-	/*
-	 * index-pack never needs to fetch missing objects except when
-	 * REF_DELTA bases are missing (which are explicitly handled). It only
-	 * accesses the repo to do hash collision checks and to check which
-	 * REF_DELTA bases need to be fetched.
-	 */
-	fetch_if_missing = 0;
 
 	if (argc == 2 && !strcmp(argv[1], "-h"))
 		usage(index_pack_usage);
 
-	read_replace_refs = 0;
+	check_replace_refs = 0;
 	fsck_options.walk = mark_link;
 
 	reset_pack_idx_option(&opts);
@@ -1742,8 +1667,6 @@ int cmd_index_pack(int argc, const char **argv, const char *prefix)
 			} else if (!strcmp(arg, "--check-self-contained-and-connected")) {
 				strict = 1;
 				check_self_contained_and_connected = 1;
-			} else if (!strcmp(arg, "--fsck-objects")) {
-				do_fsck_object = 1;
 			} else if (!strcmp(arg, "--verify")) {
 				verify = 1;
 			} else if (!strcmp(arg, "--verify-stat")) {
@@ -1755,17 +1678,17 @@ int cmd_index_pack(int argc, const char **argv, const char *prefix)
 				stat_only = 1;
 			} else if (skip_to_optional_arg(arg, "--keep", &keep_msg)) {
 				; /* nothing to do */
-			} else if (skip_to_optional_arg(arg, "--promisor", &promisor_msg)) {
-				; /* already parsed */
 			} else if (starts_with(arg, "--threads=")) {
 				char *end;
 				nr_threads = strtoul(arg+10, &end, 0);
 				if (!arg[10] || *end || nr_threads < 0)
 					usage(index_pack_usage);
-				if (!HAVE_THREADS && nr_threads != 1) {
-					warning(_("no threads support, ignoring %s"), arg);
-					nr_threads = 1;
-				}
+#ifdef NO_PTHREADS
+				if (nr_threads != 1)
+					warning(_("no threads support, "
+						  "ignoring %s"), arg);
+				nr_threads = 1;
+#endif
 			} else if (starts_with(arg, "--pack_header=")) {
 				struct pack_header *hdr;
 				char *c;
@@ -1800,11 +1723,6 @@ int cmd_index_pack(int argc, const char **argv, const char *prefix)
 					die(_("bad %s"), arg);
 			} else if (skip_prefix(arg, "--max-input-size=", &arg)) {
 				max_input_size = strtoumax(arg, NULL, 10);
-			} else if (skip_prefix(arg, "--object-format=", &arg)) {
-				hash_algo = hash_algo_by_name(arg);
-				if (hash_algo == GIT_HASH_UNKNOWN)
-					die(_("unknown hash algorithm '%s'"), arg);
-				repo_set_hash_algo(the_repository, hash_algo);
 			} else
 				usage(index_pack_usage);
 			continue;
@@ -1821,10 +1739,10 @@ int cmd_index_pack(int argc, const char **argv, const char *prefix)
 		die(_("--fix-thin cannot be used without --stdin"));
 	if (from_stdin && !startup_info->have_repository)
 		die(_("--stdin requires a git repository"));
-	if (from_stdin && hash_algo)
-		die(_("--object-format cannot be used with --stdin"));
 	if (!index_name && pack_name)
-		index_name = derive_filename(pack_name, "idx", &index_name_buf);
+		index_name = derive_filename(pack_name, ".idx", &index_name_buf);
+	if (keep_msg && !keep_name && pack_name)
+		keep_name = derive_filename(pack_name, ".keep", &keep_name_buf);
 
 	if (verify) {
 		if (!index_name)
@@ -1835,25 +1753,14 @@ int cmd_index_pack(int argc, const char **argv, const char *prefix)
 	if (strict)
 		opts.flags |= WRITE_IDX_STRICT;
 
-	if (HAVE_THREADS && !nr_threads) {
+#ifndef NO_PTHREADS
+	if (!nr_threads) {
 		nr_threads = online_cpus();
-		/*
-		 * Experiments show that going above 20 threads doesn't help,
-		 * no matter how many cores you have. Below that, we tend to
-		 * max at half the number of online_cpus(), presumably because
-		 * half of those are hyperthreads rather than full cores. We'll
-		 * never reduce the level below "3", though, to match a
-		 * historical value that nobody complained about.
-		 */
-		if (nr_threads < 4)
-			; /* too few cores to consider capping */
-		else if (nr_threads < 6)
-			nr_threads = 3; /* historic cap */
-		else if (nr_threads < 40)
-			nr_threads /= 2;
-		else
-			nr_threads = 20; /* hard cap */
+		/* An experiment showed that more threads does not mean faster */
+		if (nr_threads > 3)
+			nr_threads = 3;
 	}
+#endif
 
 	curr_pack = open_pack_file(pack_name);
 	parse_pack_header();
@@ -1861,11 +1768,11 @@ int cmd_index_pack(int argc, const char **argv, const char *prefix)
 	if (show_stat)
 		obj_stat = xcalloc(st_add(nr_objects, 1), sizeof(struct object_stat));
 	ofs_deltas = xcalloc(nr_objects, sizeof(struct ofs_delta_entry));
-	parse_pack_objects(pack_hash);
+	parse_pack_objects(pack_sha1);
 	if (report_end_of_input)
 		write_in_full(2, "\0", 1);
 	resolve_deltas();
-	conclude_pack(fix_thin_pack, curr_pack, pack_hash);
+	conclude_pack(fix_thin_pack, curr_pack, pack_sha1);
 	free(ofs_deltas);
 	free(ref_deltas);
 	if (strict)
@@ -1877,22 +1784,19 @@ int cmd_index_pack(int argc, const char **argv, const char *prefix)
 	ALLOC_ARRAY(idx_objects, nr_objects);
 	for (i = 0; i < nr_objects; i++)
 		idx_objects[i] = &objects[i].idx;
-	curr_index = write_idx_file(index_name, idx_objects, nr_objects, &opts, pack_hash);
+	curr_index = write_idx_file(index_name, idx_objects, nr_objects, &opts, pack_sha1);
 	free(idx_objects);
 
 	if (!verify)
 		final(pack_name, curr_pack,
 		      index_name, curr_index,
-		      keep_msg, promisor_msg,
-		      pack_hash);
+		      keep_name, keep_msg,
+		      pack_sha1);
 	else
 		close(input_fd);
-
-	if (do_fsck_object && fsck_finish(&fsck_options))
-		die(_("fsck error in pack objects"));
-
 	free(objects);
 	strbuf_release(&index_name_buf);
+	strbuf_release(&keep_name_buf);
 	if (pack_name == NULL)
 		free((void *) curr_pack);
 	if (index_name == NULL)

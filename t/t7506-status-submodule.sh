@@ -18,12 +18,8 @@ test_create_repo_with_commit () {
 }
 
 sanitize_output () {
-	sed -e "s/$OID_REGEX/HASH/" -e "s/$OID_REGEX/HASH/" output >output2 &&
+	sed -e "s/$_x40/HASH/" -e "s/$_x40/HASH/" output >output2 &&
 	mv output2 output
-}
-
-sanitize_diff () {
-	sed -e "/^index [0-9a-f,]*\.\.[0-9a-f]*/d" "$1"
 }
 
 
@@ -197,9 +193,9 @@ test_expect_success 'status with added and untracked file in modified submodule 
 
 test_expect_success 'setup .git file for sub' '
 	(cd sub &&
-	 rm -f new-file &&
+	 rm -f new-file
 	 REAL="$(pwd)/../.real" &&
-	 mv .git "$REAL" &&
+	 mv .git "$REAL"
 	 echo "gitdir: $REAL" >.git) &&
 	 echo .real >>.gitignore &&
 	 git commit -m "added .real to .gitignore" .gitignore
@@ -213,12 +209,12 @@ test_expect_success 'status with added file in modified submodule with .git file
 
 test_expect_success 'status with a lot of untracked files in the submodule' '
 	(
-		cd sub &&
+		cd sub
 		i=0 &&
 		while test $i -lt 1024
 		do
-			>some-file-$i &&
-			i=$(( $i + 1 )) || exit 1
+			>some-file-$i
+			i=$(( $i + 1 ))
 		done
 	) &&
 	git status --porcelain sub 2>err.actual &&
@@ -273,6 +269,7 @@ short_sha1_merge_sub1=$(cd sub1 && git rev-parse --short HEAD)
 short_sha1_merge_sub2=$(cd sub2 && git rev-parse --short HEAD)
 cat >diff_expect <<\EOF
 diff --cc .gitmodules
+index badaa4c,44f999a..0000000
 --- a/.gitmodules
 +++ b/.gitmodules
 @@@ -1,3 -1,3 +1,9 @@@
@@ -289,6 +286,7 @@ EOF
 
 cat >diff_submodule_expect <<\EOF
 diff --cc .gitmodules
+index badaa4c,44f999a..0000000
 --- a/.gitmodules
 +++ b/.gitmodules
 @@@ -1,3 -1,3 +1,9 @@@
@@ -308,8 +306,7 @@ test_expect_success 'diff with merge conflict in .gitmodules' '
 		cd super &&
 		git diff >../diff_actual 2>&1
 	) &&
-	sanitize_diff diff_actual >diff_sanitized &&
-	test_cmp diff_expect diff_sanitized
+	test_cmp diff_expect diff_actual
 '
 
 test_expect_success 'diff --submodule with merge conflict in .gitmodules' '
@@ -317,8 +314,7 @@ test_expect_success 'diff --submodule with merge conflict in .gitmodules' '
 		cd super &&
 		git diff --submodule >../diff_submodule_actual 2>&1
 	) &&
-	sanitize_diff diff_submodule_actual >diff_sanitized &&
-	test_cmp diff_submodule_expect diff_sanitized
+	test_cmp diff_submodule_expect diff_submodule_actual
 '
 
 # We'll setup different cases for further testing:
@@ -329,8 +325,7 @@ test_expect_success 'setup superproject with untracked file in nested submodule'
 	(
 		cd super &&
 		git clean -dfx &&
-		git rm .gitmodules &&
-		git commit -m "remove .gitmodules" &&
+		rm .gitmodules &&
 		git submodule add -f ./sub1 &&
 		git submodule add -f ./sub2 &&
 		git submodule add -f ./sub1 sub3 &&

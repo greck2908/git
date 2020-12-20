@@ -3,7 +3,6 @@
  *
  * Copyright (C) Linus Torvalds 2006
  */
-#define USE_THE_INDEX_COMPATIBILITY_MACROS
 #include "builtin.h"
 #include "config.h"
 #include "lockfile.h"
@@ -61,7 +60,7 @@ static void print_error_files(struct string_list *files_list,
 	}
 }
 
-static void submodules_absorb_gitdir_if_needed(void)
+static void submodules_absorb_gitdir_if_needed(const char *prefix)
 {
 	int i;
 	for (i = 0; i < list.nr; i++) {
@@ -83,7 +82,7 @@ static void submodules_absorb_gitdir_if_needed(void)
 			continue;
 
 		if (!submodule_uses_gitfile(name))
-			absorb_git_dir_into_superproject(name,
+			absorb_git_dir_into_superproject(prefix, name,
 				ABSORB_GITDIR_RECURSE_SUBMODULES);
 	}
 }
@@ -110,7 +109,7 @@ static int check_local_mod(struct object_id *head, int index_only)
 		const struct cache_entry *ce;
 		const char *name = list.entry[i].name;
 		struct object_id oid;
-		unsigned short mode;
+		unsigned mode;
 		int local_changes = 0;
 		int staged_changes = 0;
 
@@ -179,9 +178,9 @@ static int check_local_mod(struct object_id *head, int index_only)
 		 * way as changed from the HEAD.
 		 */
 		if (no_head
-		     || get_tree_entry(the_repository, head, name, &oid, &mode)
+		     || get_tree_entry(head->hash, name, oid.hash, &mode)
 		     || ce->ce_mode != create_ce_mode(mode)
-		     || !oideq(&ce->oid, &oid))
+		     || oidcmp(&ce->oid, &oid))
 			staged_changes = 1;
 
 		/*
@@ -234,26 +233,24 @@ static int check_local_mod(struct object_id *head, int index_only)
 	return errs;
 }
 
+static struct lock_file lock_file;
+
 static int show_only = 0, force = 0, index_only = 0, recursive = 0, quiet = 0;
-static int ignore_unmatch = 0, pathspec_file_nul;
-static char *pathspec_from_file;
+static int ignore_unmatch = 0;
 
 static struct option builtin_rm_options[] = {
 	OPT__DRY_RUN(&show_only, N_("dry run")),
 	OPT__QUIET(&quiet, N_("do not list removed files")),
 	OPT_BOOL( 0 , "cached",         &index_only, N_("only remove from the index")),
-	OPT__FORCE(&force, N_("override the up-to-date check"), PARSE_OPT_NOCOMPLETE),
+	OPT__FORCE(&force, N_("override the up-to-date check")),
 	OPT_BOOL('r', NULL,             &recursive,  N_("allow recursive removal")),
 	OPT_BOOL( 0 , "ignore-unmatch", &ignore_unmatch,
 				N_("exit with a zero status even if nothing matched")),
-	OPT_PATHSPEC_FROM_FILE(&pathspec_from_file),
-	OPT_PATHSPEC_FILE_NUL(&pathspec_file_nul),
 	OPT_END(),
 };
 
 int cmd_rm(int argc, const char **argv, const char *prefix)
 {
-	struct lock_file lock_file = LOCK_INIT;
 	int i;
 	struct pathspec pathspec;
 	char *seen;
@@ -262,24 +259,8 @@ int cmd_rm(int argc, const char **argv, const char *prefix)
 
 	argc = parse_options(argc, argv, prefix, builtin_rm_options,
 			     builtin_rm_usage, 0);
-
-	parse_pathspec(&pathspec, 0,
-		       PATHSPEC_PREFER_CWD,
-		       prefix, argv);
-
-	if (pathspec_from_file) {
-		if (pathspec.nr)
-			die(_("--pathspec-from-file is incompatible with pathspec arguments"));
-
-		parse_pathspec_file(&pathspec, 0,
-				    PATHSPEC_PREFER_CWD,
-				    prefix, pathspec_from_file, pathspec_file_nul);
-	} else if (pathspec_file_nul) {
-		die(_("--pathspec-file-nul requires --pathspec-from-file"));
-	}
-
-	if (!pathspec.nr)
-		die(_("No pathspec was given. Which files should I remove?"));
+	if (!argc)
+		usage_with_options(builtin_rm_usage, builtin_rm_options);
 
 	if (!index_only)
 		setup_work_tree();
@@ -289,20 +270,23 @@ int cmd_rm(int argc, const char **argv, const char *prefix)
 	if (read_cache() < 0)
 		die(_("index file corrupt"));
 
-	refresh_index(&the_index, REFRESH_QUIET|REFRESH_UNMERGED, &pathspec, NULL, NULL);
+	parse_pathspec(&pathspec, 0,
+		       PATHSPEC_PREFER_CWD,
+		       prefix, argv);
+	refresh_index(&the_index, REFRESH_QUIET, &pathspec, NULL, NULL);
 
 	seen = xcalloc(pathspec.nr, 1);
 
 	for (i = 0; i < active_nr; i++) {
 		const struct cache_entry *ce = active_cache[i];
-		if (!ce_path_match(&the_index, ce, &pathspec, seen))
+		if (!ce_path_match(ce, &pathspec, seen))
 			continue;
 		ALLOC_GROW(list.entry, list.nr + 1, list.alloc);
 		list.entry[list.nr].name = xstrdup(ce->name);
 		list.entry[list.nr].is_submodule = S_ISGITLINK(ce->ce_mode);
 		if (list.entry[list.nr++].is_submodule &&
 		    !is_staging_gitmodules_ok(&the_index))
-			die(_("please stage your changes to .gitmodules or stash them to proceed"));
+			die (_("Please stage your changes to .gitmodules or stash them to proceed"));
 	}
 
 	if (pathspec.nr) {
@@ -329,7 +313,7 @@ int cmd_rm(int argc, const char **argv, const char *prefix)
 	}
 
 	if (!index_only)
-		submodules_absorb_gitdir_if_needed();
+		submodules_absorb_gitdir_if_needed(prefix);
 
 	/*
 	 * If not forced, the file, the index and the HEAD (if exists)
@@ -401,9 +385,10 @@ int cmd_rm(int argc, const char **argv, const char *prefix)
 			stage_updated_gitmodules(&the_index);
 	}
 
-	if (write_locked_index(&the_index, &lock_file,
-			       COMMIT_LOCK | SKIP_IF_UNCHANGED))
-		die(_("Unable to write new index file"));
+	if (active_cache_changed) {
+		if (write_locked_index(&the_index, &lock_file, COMMIT_LOCK))
+			die(_("Unable to write new index file"));
+	}
 
 	return 0;
 }

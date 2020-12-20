@@ -1,7 +1,7 @@
 package Git::I18N;
 use 5.008;
 use strict;
-use warnings $ENV{GIT_PERL_FATAL_WARNINGS} ? qw(FATAL all) : ();
+use warnings;
 BEGIN {
 	require Exporter;
 	if ($] < 5.008003) {
@@ -18,7 +18,7 @@ our @EXPORT_OK = @EXPORT;
 
 sub __bootstrap_locale_messages {
 	our $TEXTDOMAIN = 'git';
-	our $TEXTDOMAINDIR ||= $ENV{GIT_TEXTDOMAINDIR} || '@@LOCALEDIR@@';
+	our $TEXTDOMAINDIR = $ENV{GIT_TEXTDOMAINDIR} || '++LOCALEDIR++';
 
 	require POSIX;
 	POSIX->import(qw(setlocale));

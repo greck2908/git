@@ -1,18 +1,8 @@
 #ifndef REMOTE_H
 #define REMOTE_H
 
-#include "cache.h"
 #include "parse-options.h"
 #include "hashmap.h"
-#include "refspec.h"
-
-/**
- * The API gives access to the configuration related to remotes. It handles
- * all three configuration mechanisms historically and currently used by Git,
- * and presents the information in a uniform fashion. Note that the code also
- * handles plain URLs without any configuration, giving them just the default
- * information.
- */
 
 enum {
 	REMOTE_UNCONFIGURED = 0,
@@ -22,84 +12,72 @@ enum {
 };
 
 struct remote {
-	struct hashmap_entry ent;
+	struct hashmap_entry ent;  /* must be first */
 
-	/* The user's nickname for the remote */
 	const char *name;
-
 	int origin, configured_in_repo;
 
 	const char *foreign_vcs;
 
-	/* An array of all of the url_nr URLs configured for the remote */
 	const char **url;
-
 	int url_nr;
 	int url_alloc;
 
-	/* An array of all of the pushurl_nr push URLs configured for the remote */
 	const char **pushurl;
-
 	int pushurl_nr;
 	int pushurl_alloc;
 
-	struct refspec push;
+	const char **push_refspec;
+	struct refspec *push;
+	int push_refspec_nr;
+	int push_refspec_alloc;
 
-	struct refspec fetch;
+	const char **fetch_refspec;
+	struct refspec *fetch;
+	int fetch_refspec_nr;
+	int fetch_refspec_alloc;
 
 	/*
-	 * The setting for whether to fetch tags (as a separate rule from the
-	 * configured refspecs);
 	 * -1 to never fetch tags
 	 * 0 to auto-follow tags on heuristic (default)
 	 * 1 to always auto-follow tags
 	 * 2 to always fetch tags
 	 */
 	int fetch_tags;
-
 	int skip_default_update;
 	int mirror;
 	int prune;
-	int prune_tags;
 
-	/**
-	 * The configured helper programs to run on the remote side, for
-	 * Git-native protocols.
-	 */
 	const char *receivepack;
 	const char *uploadpack;
 
-	/* The proxy to use for curl (http, https, ftp, etc.) URLs. */
+	/*
+	 * for curl remotes only
+	 */
 	char *http_proxy;
-
-	/* The method used for authenticating against `http_proxy`. */
 	char *http_proxy_authmethod;
 };
 
-/**
- * struct remotes can be found by name with remote_get().
- * remote_get(NULL) will return the default remote, given the current branch
- * and configuration.
- */
 struct remote *remote_get(const char *name);
-
 struct remote *pushremote_get(const char *name);
 int remote_is_configured(struct remote *remote, int in_repo);
 
 typedef int each_remote_fn(struct remote *remote, void *priv);
-
-/* iterate through struct remotes */
 int for_each_remote(each_remote_fn fn, void *priv);
 
 int remote_has_url(struct remote *remote, const char *url);
 
-struct ref_push_report {
-	const char *ref_name;
-	struct object_id *old_oid;
-	struct object_id *new_oid;
-	unsigned int forced_update:1;
-	struct ref_push_report *next;
+struct refspec {
+	unsigned force : 1;
+	unsigned pattern : 1;
+	unsigned matching : 1;
+	unsigned exact_sha1 : 1;
+
+	char *src;
+	char *dst;
 };
+
+extern const struct refspec *tag_refspec;
 
 struct ref {
 	struct ref *next;
@@ -107,20 +85,11 @@ struct ref {
 	struct object_id new_oid;
 	struct object_id old_oid_expect; /* used by expect-old */
 	char *symref;
-	char *tracking_ref;
 	unsigned int
 		force:1,
 		forced_update:1,
 		expect_old_sha1:1,
-		exact_oid:1,
-		deletion:1,
-		/* Need to check if local reflog reaches the remote tip. */
-		check_reachable:1,
-		/*
-		 * Store the result of the check enabled by "check_reachable";
-		 * implies the local reflog does not reach the remote tip.
-		 */
-		unreachable:1;
+		deletion:1;
 
 	enum {
 		REF_NOT_MATCHED = 0, /* initial value */
@@ -150,14 +119,12 @@ struct ref {
 		REF_STATUS_REJECT_NEEDS_FORCE,
 		REF_STATUS_REJECT_STALE,
 		REF_STATUS_REJECT_SHALLOW,
-		REF_STATUS_REJECT_REMOTE_UPDATED,
 		REF_STATUS_UPTODATE,
 		REF_STATUS_REMOTE_REJECT,
 		REF_STATUS_EXPECTING_REPORT,
 		REF_STATUS_ATOMIC_PUSH_FAILED
 	} status;
 	char *remote_status;
-	struct ref_push_report *report;
 	struct ref *peer_ref; /* when renaming */
 	char name[FLEX_ARRAY]; /* more */
 };
@@ -166,41 +133,30 @@ struct ref {
 #define REF_HEADS	(1u << 1)
 #define REF_TAGS	(1u << 2)
 
-struct ref *find_ref_by_name(const struct ref *list, const char *name);
+extern struct ref *find_ref_by_name(const struct ref *list, const char *name);
 
 struct ref *alloc_ref(const char *name);
 struct ref *copy_ref(const struct ref *ref);
 struct ref *copy_ref_list(const struct ref *ref);
 void sort_ref_list(struct ref **, int (*cmp)(const void *, const void *));
-int count_refspec_match(const char *, struct ref *refs, struct ref **matched_ref);
+extern int count_refspec_match(const char *, struct ref *refs, struct ref **matched_ref);
 int ref_compare_name(const void *, const void *);
 
 int check_ref_type(const struct ref *ref, int flags);
 
 /*
- * Free a single ref and its peer, or an entire list of refs and their peers,
- * respectively.
+ * Frees the entire list and peers of elements.
  */
-void free_one_ref(struct ref *ref);
 void free_refs(struct ref *ref);
 
 struct oid_array;
-struct packet_reader;
-struct strvec;
-struct string_list;
-struct ref **get_remote_heads(struct packet_reader *reader,
-			      struct ref **list, unsigned int flags,
-			      struct oid_array *extra_have,
-			      struct oid_array *shallow_points);
-
-/* Used for protocol v2 in order to retrieve refs from a remote */
-struct ref **get_remote_refs(int fd_out, struct packet_reader *reader,
-			     struct ref **list, int for_push,
-			     const struct strvec *ref_prefixes,
-			     const struct string_list *server_options,
-			     int stateless_rpc);
+extern struct ref **get_remote_heads(int in, char *src_buf, size_t src_len,
+				     struct ref **list, unsigned int flags,
+				     struct oid_array *extra_have,
+				     struct oid_array *shallow);
 
 int resolve_remote_symref(struct ref *ref, struct ref *list);
+int ref_newer(const struct object_id *new_oid, const struct object_id *old_oid);
 
 /*
  * Remove and free all but the first of any entries in the input list
@@ -211,26 +167,26 @@ int resolve_remote_symref(struct ref *ref, struct ref *list);
  */
 struct ref *ref_remove_duplicates(struct ref *ref_map);
 
-/*
- * Remove all entries in the input list which match any negative refspec in
- * the refspec list.
- */
-struct ref *apply_negative_refspecs(struct ref *ref_map, struct refspec *rs);
+int valid_fetch_refspec(const char *refspec);
+struct refspec *parse_fetch_refspec(int nr_refspec, const char **refspec);
+extern struct refspec *parse_push_refspec(int nr_refspec, const char **refspec);
 
-int query_refspecs(struct refspec *rs, struct refspec_item *query);
-char *apply_refspecs(struct refspec *rs, const char *name);
+void free_refspec(int nr_refspec, struct refspec *refspec);
 
-int check_push_refs(struct ref *src, struct refspec *rs);
+extern int query_refspecs(struct refspec *specs, int nr, struct refspec *query);
+char *apply_refspecs(struct refspec *refspecs, int nr_refspec,
+		     const char *name);
+
+int check_push_refs(struct ref *src, int nr_refspec, const char **refspec);
 int match_push_refs(struct ref *src, struct ref **dst,
-		    struct refspec *rs, int flags);
+		    int nr_refspec, const char **refspec, int all);
 void set_ref_status_for_push(struct ref *remote_refs, int send_mirror,
 	int force_update);
 
 /*
  * Given a list of the remote refs and the specification of things to
  * fetch, makes a (separate) list of the refs to fetch and the local
- * refs to store into. Note that negative refspecs are ignored here, and
- * should be handled separately.
+ * refs to store into.
  *
  * *tail is the pointer to the tail pointer of the list of results
  * beforehand, and will be set to the tail pointer of the list of
@@ -239,7 +195,7 @@ void set_ref_status_for_push(struct ref *remote_refs, int send_mirror,
  * missing_ok is usually false, but when we are adding branch.$name.merge
  * it is Ok if the branch is not at the remote anymore.
  */
-int get_fetch_map(const struct ref *remote_refs, const struct refspec_item *refspec,
+int get_fetch_map(const struct ref *remote_refs, const struct refspec *refspec,
 		  struct ref ***tail, int missing_ok);
 
 struct ref *get_remote_ref(const struct ref *remote_refs, const char *name);
@@ -247,38 +203,18 @@ struct ref *get_remote_ref(const struct ref *remote_refs, const char *name);
 /*
  * For the given remote, reads the refspec's src and sets the other fields.
  */
-int remote_find_tracking(struct remote *remote, struct refspec_item *refspec);
+int remote_find_tracking(struct remote *remote, struct refspec *refspec);
 
-/**
- * struct branch holds the configuration for a branch. It can be looked up with
- * branch_get(name) for "refs/heads/{name}", or with branch_get(NULL) for HEAD.
- */
 struct branch {
-
-	/* The short name of the branch. */
 	const char *name;
-
-	/* The full path for the branch ref. */
 	const char *refname;
 
-	/* The name of the remote listed in the configuration. */
 	const char *remote_name;
-
 	const char *pushremote_name;
 
-	/* An array of the "merge" lines in the configuration. */
 	const char **merge_name;
-
-	/**
-	 * An array of the struct refspecs used for the merge lines. That is,
-	 * merge[i]->dst is a local tracking ref which should be merged into this
-	 * branch by default.
-	 */
-	struct refspec_item **merge;
-
-	/* The number of merge configurations */
+	struct refspec **merge;
 	int merge_nr;
-
 	int merge_alloc;
 
 	const char *push_tracking_ref;
@@ -287,11 +223,10 @@ struct branch {
 struct branch *branch_get(const char *name);
 const char *remote_for_branch(struct branch *branch, int *explicit);
 const char *pushremote_for_branch(struct branch *branch, int *explicit);
-const char *remote_ref_for_branch(struct branch *branch, int for_push);
+const char *remote_ref_for_branch(struct branch *branch, int for_push,
+				  int *explicit);
 
-/* returns true if the given branch has merge configuration given. */
 int branch_has_merge_config(struct branch *branch);
-
 int branch_merge_matches(struct branch *, int n, const char *);
 
 /**
@@ -331,8 +266,7 @@ enum ahead_behind_flags {
 
 /* Reporting of tracking info */
 int stat_tracking_info(struct branch *branch, int *num_ours, int *num_theirs,
-		       const char **upstream_name, int for_push,
-		       enum ahead_behind_flags abf);
+		       const char **upstream_name, enum ahead_behind_flags abf);
 int format_tracking_info(struct branch *branch, struct strbuf *sb,
 			 enum ahead_behind_flags abf);
 
@@ -348,7 +282,7 @@ struct ref *guess_remote_head(const struct ref *head,
 			      int all);
 
 /* Return refs which no longer exist on remote */
-struct ref *get_stale_heads(struct refspec *rs, struct ref *fetch_map);
+struct ref *get_stale_heads(struct refspec *refs, int ref_count, struct ref *fetch_map);
 
 /*
  * Compare-and-swap
@@ -357,7 +291,6 @@ struct ref *get_stale_heads(struct refspec *rs, struct ref *fetch_map);
 
 struct push_cas_option {
 	unsigned use_tracking_for_rest:1;
-	unsigned use_force_if_includes:1;
 	struct push_cas {
 		struct object_id expect;
 		unsigned use_tracking:1;
@@ -367,9 +300,9 @@ struct push_cas_option {
 	int alloc;
 };
 
-int parseopt_push_cas_option(const struct option *, const char *arg, int unset);
+extern int parseopt_push_cas_option(const struct option *, const char *arg, int unset);
 
-int is_empty_cas(const struct push_cas_option *);
+extern int is_empty_cas(const struct push_cas_option *);
 void apply_push_cas(struct push_cas_option *, struct remote *, struct ref *);
 
 #endif

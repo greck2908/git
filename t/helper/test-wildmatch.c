@@ -1,7 +1,6 @@
-#include "test-tool.h"
 #include "cache.h"
 
-int cmd__wildmatch(int argc, const char **argv)
+int cmd_main(int argc, const char **argv)
 {
 	int i;
 	for (i = 2; i < argc; i++) {
@@ -17,8 +16,6 @@ int cmd__wildmatch(int argc, const char **argv)
 		return !!wildmatch(argv[3], argv[2], WM_PATHNAME | WM_CASEFOLD);
 	else if (!strcmp(argv[1], "pathmatch"))
 		return !!wildmatch(argv[3], argv[2], 0);
-	else if (!strcmp(argv[1], "ipathmatch"))
-		return !!wildmatch(argv[3], argv[2], WM_CASEFOLD);
 	else
 		return 1;
 }

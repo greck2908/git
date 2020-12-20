@@ -1,38 +1,6 @@
 #ifndef OBJECT_H
 #define OBJECT_H
 
-#include "cache.h"
-
-struct buffer_slab;
-
-struct parsed_object_pool {
-	struct object **obj_hash;
-	int nr_objs, obj_hash_size;
-
-	/* TODO: migrate alloc_states to mem-pool? */
-	struct alloc_state *blob_state;
-	struct alloc_state *tree_state;
-	struct alloc_state *commit_state;
-	struct alloc_state *tag_state;
-	struct alloc_state *object_state;
-
-	/* parent substitutions from .git/info/grafts and .git/shallow */
-	struct commit_graft **grafts;
-	int grafts_alloc, grafts_nr;
-
-	int is_shallow;
-	struct stat_validity *shallow_stat;
-	char *alternate_shallow_file;
-
-	int commit_graft_prepared;
-	int substituted_parent;
-
-	struct buffer_slab *buffer_slab;
-};
-
-struct parsed_object_pool *parsed_object_pool_new(void);
-void parsed_object_pool_clear(struct parsed_object_pool *o);
-
 struct object_list {
 	struct object *item;
 	struct object_list *next;
@@ -57,30 +25,23 @@ struct object_array {
 
 #define OBJECT_ARRAY_INIT { 0, 0, NULL }
 
+#define TYPE_BITS   3
 /*
  * object flag allocation:
- * revision.h:               0---------10         15             23------26
- * fetch-pack.c:             01
- * negotiator/default.c:       2--5
- * walker.c:                 0-2
- * upload-pack.c:                4       11-----14  16-----19
- * builtin/blame.c:                        12-13
- * bisect.c:                                        16
- * bundle.c:                                        16
- * http-push.c:                          11-----14
- * commit-graph.c:                                15
- * commit-reach.c:                                  16-----19
- * sha1-name.c:                                              20
- * list-objects-filter.c:                                      21
- * builtin/fsck.c:           0--3
- * builtin/gc.c:             0
- * builtin/index-pack.c:                                     2021
- * builtin/pack-objects.c:                                   20
- * builtin/reflog.c:                   10--12
- * builtin/show-branch.c:    0-------------------------------------------26
- * builtin/unpack-objects.c:                                 2021
+ * revision.h:      0---------10                                26
+ * fetch-pack.c:    0---5
+ * walker.c:        0-2
+ * upload-pack.c:       4       11----------------19
+ * builtin/blame.c:               12-13
+ * bisect.c:                               16
+ * bundle.c:                               16
+ * http-push.c:                            16-----19
+ * commit.c:                               16-----19
+ * sha1_name.c:                                     20
+ * list-objects-filter.c:                             21
+ * builtin/fsck.c:  0--3
  */
-#define FLAG_BITS  28
+#define FLAG_BITS  27
 
 /*
  * The object type is stored in 3 bits.
@@ -92,19 +53,19 @@ struct object {
 	struct object_id oid;
 };
 
-const char *type_name(unsigned int type);
-int type_from_string_gently(const char *str, ssize_t, int gentle);
+extern const char *typename(unsigned int type);
+extern int type_from_string_gently(const char *str, ssize_t, int gentle);
 #define type_from_string(str) type_from_string_gently(str, -1, 0)
 
 /*
  * Return the current number of buckets in the object hashmap.
  */
-unsigned int get_max_object_index(void);
+extern unsigned int get_max_object_index(void);
 
 /*
  * Return the object from the specified bucket in the object hashmap.
  */
-struct object *get_indexed_object(unsigned int);
+extern struct object *get_indexed_object(unsigned int);
 
 /*
  * This can be used to see if we have heard of the object before, but
@@ -118,9 +79,9 @@ struct object *get_indexed_object(unsigned int);
  * half-initialised objects, the caller is expected to initialize them
  * by calling parse_object() on them.
  */
-struct object *lookup_object(struct repository *r, const struct object_id *oid);
+struct object *lookup_object(const unsigned char *sha1);
 
-void *create_object(struct repository *r, const struct object_id *oid, void *obj);
+extern void *create_object(const unsigned char *sha1, void *obj);
 
 void *object_as_type(struct object *obj, enum object_type type, int quiet);
 
@@ -129,7 +90,7 @@ void *object_as_type(struct object *obj, enum object_type type, int quiet);
  *
  * Returns NULL if the object is missing or corrupt.
  */
-struct object *parse_object(struct repository *r, const struct object_id *oid);
+struct object *parse_object(const struct object_id *oid);
 
 /*
  * Like parse_object, but will die() instead of returning NULL. If the
@@ -142,17 +103,15 @@ struct object *parse_object_or_die(const struct object_id *oid, const char *name
  * parsing it.  eaten_p indicates if the object has a borrowed copy
  * of buffer and the caller should not free() it.
  */
-struct object *parse_object_buffer(struct repository *r, const struct object_id *oid, enum object_type type, unsigned long size, void *buffer, int *eaten_p);
+struct object *parse_object_buffer(const struct object_id *oid, enum object_type type, unsigned long size, void *buffer, int *eaten_p);
 
 /** Returns the object, with potentially excess memory allocated. **/
-struct object *lookup_unknown_object(const struct object_id *oid);
+struct object *lookup_unknown_object(const unsigned  char *sha1);
 
 struct object_list *object_list_insert(struct object *item,
 				       struct object_list **list_p);
 
 int object_list_contains(struct object_list *list, struct object *obj);
-
-void object_list_free(struct object_list **list);
 
 /* Object array handling .. */
 void add_object_array(struct object *obj, const char *name, struct object_array *array);
@@ -189,11 +148,5 @@ void object_array_remove_duplicates(struct object_array *array);
 void object_array_clear(struct object_array *array);
 
 void clear_object_flags(unsigned flags);
-
-/*
- * Clear the specified object flags from all in-core commit objects from
- * the specified repository.
- */
-void repo_clear_commit_marks(struct repository *r, unsigned int flags);
 
 #endif /* OBJECT_H */

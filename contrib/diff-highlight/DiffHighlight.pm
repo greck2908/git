@@ -4,11 +4,6 @@ use 5.008;
 use warnings FATAL => 'all';
 use strict;
 
-# Use the correct value for both UNIX and Windows (/dev/null vs nul)
-use File::Spec;
-
-my $NULL = File::Spec->devnull();
-
 # Highlight by reversing foreground and background. You could do
 # other things like bold or underline if you prefer.
 my @OLD_HIGHLIGHT = (
@@ -26,82 +21,37 @@ my $RESET = "\x1b[m";
 my $COLOR = qr/\x1b\[[0-9;]*m/;
 my $BORING = qr/$COLOR|\s/;
 
+# The patch portion of git log -p --graph should only ever have preceding | and
+# not / or \ as merge history only shows up on the commit line.
+my $GRAPH = qr/$COLOR?\|$COLOR?\s+/;
+
 my @removed;
 my @added;
 my $in_hunk;
-my $graph_indent = 0;
 
 our $line_cb = sub { print @_ };
 our $flush_cb = sub { local $| = 1 };
 
-# Count the visible width of a string, excluding any terminal color sequences.
-sub visible_width {
-	local $_ = shift;
-	my $ret = 0;
-	while (length) {
-		if (s/^$COLOR//) {
-			# skip colors
-		} elsif (s/^.//) {
-			$ret++;
-		}
-	}
-	return $ret;
-}
-
-# Return a substring of $str, omitting $len visible characters from the
-# beginning, where terminal color sequences do not count as visible.
-sub visible_substr {
-	my ($str, $len) = @_;
-	while ($len > 0) {
-		if ($str =~ s/^$COLOR//) {
-			next
-		}
-		$str =~ s/^.//;
-		$len--;
-	}
-	return $str;
-}
-
 sub handle_line {
-	my $orig = shift;
-	local $_ = $orig;
-
-	# match a graph line that begins a commit
-	if (/^(?:$COLOR?\|$COLOR?[ ])* # zero or more leading "|" with space
-	         $COLOR?\*$COLOR?[ ]   # a "*" with its trailing space
-	      (?:$COLOR?\|$COLOR?[ ])* # zero or more trailing "|"
-	                         [ ]*  # trailing whitespace for merges
-	    /x) {
-		my $graph_prefix = $&;
-
-		# We must flush before setting graph indent, since the
-		# new commit may be indented differently from what we
-		# queued.
-		flush();
-		$graph_indent = visible_width($graph_prefix);
-
-	} elsif ($graph_indent) {
-		if (length($_) < $graph_indent) {
-			$graph_indent = 0;
-		} else {
-			$_ = visible_substr($_, $graph_indent);
-		}
-	}
+	local $_ = shift;
 
 	if (!$in_hunk) {
-		$line_cb->($orig);
-		$in_hunk = /^$COLOR*\@\@ /;
+		$line_cb->($_);
+		$in_hunk = /^$GRAPH*$COLOR*\@\@ /;
 	}
-	elsif (/^$COLOR*-/) {
-		push @removed, $orig;
+	elsif (/^$GRAPH*$COLOR*-/) {
+		push @removed, $_;
 	}
-	elsif (/^$COLOR*\+/) {
-		push @added, $orig;
+	elsif (/^$GRAPH*$COLOR*\+/) {
+		push @added, $_;
 	}
 	else {
-		flush();
-		$line_cb->($orig);
-		$in_hunk = /^$COLOR*[\@ ]/;
+		show_hunk(\@removed, \@added);
+		@removed = ();
+		@added = ();
+
+		$line_cb->($_);
+		$in_hunk = /^$GRAPH*$COLOR*[\@ ]/;
 	}
 
 	# Most of the time there is enough output to keep things streaming,
@@ -112,7 +62,7 @@ sub handle_line {
 	# Since we can receive arbitrary input, there's no optimal
 	# place to flush. Flushing on a blank line is a heuristic that
 	# happens to match git-log output.
-	if (/^$/) {
+	if (!length) {
 		$flush_cb->();
 	}
 }
@@ -121,8 +71,6 @@ sub flush {
 	# Flush any queued hunk (this can happen when there is no trailing
 	# context in the final diff of the input).
 	show_hunk(\@removed, \@added);
-	@removed = ();
-	@added = ();
 }
 
 sub highlight_stdin {
@@ -139,7 +87,7 @@ sub highlight_stdin {
 # fallback, which means we will work even if git can't be run.
 sub color_config {
 	my ($key, $default) = @_;
-	my $s = `git config --get-color $key 2>$NULL`;
+	my $s = `git config --get-color $key 2>/dev/null`;
 	return length($s) ? $s : $default;
 }
 
@@ -278,8 +226,8 @@ sub is_pair_interesting {
 	my $suffix_a = join('', @$a[($sa+1)..$#$a]);
 	my $suffix_b = join('', @$b[($sb+1)..$#$b]);
 
-	return visible_substr($prefix_a, $graph_indent) !~ /^$COLOR*-$BORING*$/ ||
-	       visible_substr($prefix_b, $graph_indent) !~ /^$COLOR*\+$BORING*$/ ||
+	return $prefix_a !~ /^$GRAPH*$COLOR*-$BORING*$/ ||
+	       $prefix_b !~ /^$GRAPH*$COLOR*\+$BORING*$/ ||
 	       $suffix_a !~ /^$BORING*$/ ||
 	       $suffix_b !~ /^$BORING*$/;
 }

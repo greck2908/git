@@ -8,7 +8,7 @@
 
 static unsigned int hash_obj(const struct object *obj, unsigned int n)
 {
-	return oidhash(&obj->oid) % n;
+	return sha1hash(obj->oid.hash) % n;
 }
 
 static void *insert_decoration(struct decoration *n, const struct object *base, void *decoration)

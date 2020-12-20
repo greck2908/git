@@ -128,7 +128,7 @@ int add_reflog_for_walk(struct reflog_walk_info *info,
 	enum selector_type selector = SELECTOR_NONE;
 
 	if (commit->object.flags & UNINTERESTING)
-		die("cannot walk reflogs for %s", name);
+		die ("Cannot walk reflogs for %s", name);
 
 	branch = xstrdup(name);
 	if (at && at[1] == '{') {
@@ -153,7 +153,7 @@ int add_reflog_for_walk(struct reflog_walk_info *info,
 			free(branch);
 			branch = resolve_refdup("HEAD", 0, NULL, NULL);
 			if (!branch)
-				die("no current branch");
+				die ("No current branch");
 
 		}
 		reflogs = read_complete_reflog(branch);
@@ -305,8 +305,7 @@ static struct commit *next_reflog_commit(struct commit_reflog *log)
 {
 	for (; log->recno >= 0; log->recno--) {
 		struct reflog_info *entry = &log->reflogs->items[log->recno];
-		struct object *obj = parse_object(the_repository,
-						  &entry->noid);
+		struct object *obj = parse_object(&entry->noid);
 
 		if (obj && obj->type == OBJ_COMMIT)
 			return (struct commit *)obj;

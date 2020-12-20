@@ -24,7 +24,7 @@
 #include "cache.h"
 #include "config.h"
 #include "credential.h"
-#include "exec-cmd.h"
+#include "exec_cmd.h"
 #include "run-command.h"
 #include "parse-options.h"
 #ifdef NO_OPENSSL
@@ -84,17 +84,17 @@ static int nfvasprintf(char **strp, const char *fmt, va_list ap)
 }
 
 struct imap_server_conf {
-	const char *name;
-	const char *tunnel;
-	const char *host;
+	char *name;
+	char *tunnel;
+	char *host;
 	int port;
-	const char *folder;
-	const char *user;
-	const char *pass;
+	char *folder;
+	char *user;
+	char *pass;
 	int use_ssl;
 	int ssl_verify;
 	int use_html;
-	const char *auth_method;
+	char *auth_method;
 };
 
 static struct imap_server_conf server = {
@@ -511,7 +511,7 @@ static int nfsnprintf(char *buf, int blen, const char *fmt, ...)
 
 	va_start(va, fmt);
 	if (blen <= 0 || (unsigned)(ret = vsnprintf(buf, blen, fmt, va)) >= (unsigned)blen)
-		BUG("buffer too small. Please report a bug.");
+		die("BUG: buffer too small. Please report a bug.");
 	va_end(va);
 	return ret;
 }
@@ -955,7 +955,7 @@ static void server_fill_credential(struct imap_server_conf *srvc, struct credent
 		srvc->pass = xstrdup(cred->password);
 }
 
-static struct imap_store *imap_open_store(struct imap_server_conf *srvc, const char *folder)
+static struct imap_store *imap_open_store(struct imap_server_conf *srvc, char *folder)
 {
 	struct credential cred = CREDENTIAL_INIT;
 	struct imap_store *ctx;
@@ -976,7 +976,7 @@ static struct imap_store *imap_open_store(struct imap_server_conf *srvc, const c
 
 		imap_info("Starting tunnel '%s'... ", srvc->tunnel);
 
-		strvec_push(&tunnel.args, srvc->tunnel);
+		argv_array_push(&tunnel.args, srvc->tunnel);
 		tunnel.use_shell = 1;
 		tunnel.in = -1;
 		tunnel.out = -1;
@@ -1114,7 +1114,7 @@ static struct imap_store *imap_open_store(struct imap_server_conf *srvc, const c
 
 			if (!strcmp(srvc->auth_method, "CRAM-MD5")) {
 				if (!CAP(AUTH_CRAM_MD5)) {
-					fprintf(stderr, "You specified "
+					fprintf(stderr, "You specified"
 						"CRAM-MD5 as authentication method, "
 						"but %s doesn't support it.\n", srvc->host);
 					goto bail;
@@ -1189,11 +1189,11 @@ bail:
  */
 static void lf_to_crlf(struct strbuf *msg)
 {
-	char *new_msg;
+	char *new;
 	size_t i, j;
 	char lastc;
 
-	/* First pass: tally, in j, the size of the new_msg string: */
+	/* First pass: tally, in j, the size of the new string: */
 	for (i = j = 0, lastc = '\0'; i < msg->len; i++) {
 		if (msg->buf[i] == '\n' && lastc != '\r')
 			j++; /* a CR will need to be added here */
@@ -1201,18 +1201,18 @@ static void lf_to_crlf(struct strbuf *msg)
 		j++;
 	}
 
-	new_msg = xmallocz(j);
+	new = xmallocz(j);
 
 	/*
-	 * Second pass: write the new_msg string.  Note that this loop is
+	 * Second pass: write the new string.  Note that this loop is
 	 * otherwise identical to the first pass.
 	 */
 	for (i = j = 0, lastc = '\0'; i < msg->len; i++) {
 		if (msg->buf[i] == '\n' && lastc != '\r')
-			new_msg[j++] = '\r';
-		lastc = new_msg[j++] = msg->buf[i];
+			new[j++] = '\r';
+		lastc = new[j++] = msg->buf[i];
 	}
-	strbuf_attach(msg, new_msg, j, j + 1);
+	strbuf_attach(msg, new, j, j + 1);
 }
 
 /*
@@ -1338,26 +1338,15 @@ static int split_msg(struct strbuf *all_msgs, struct strbuf *msg, int *ofs)
 	return 1;
 }
 
-static int git_imap_config(const char *var, const char *val, void *cb)
+static void git_imap_config(void)
 {
+	const char *val = NULL;
 
-	if (!strcmp("imap.sslverify", var))
-		server.ssl_verify = git_config_bool(var, val);
-	else if (!strcmp("imap.preformattedhtml", var))
-		server.use_html = git_config_bool(var, val);
-	else if (!strcmp("imap.folder", var))
-		return git_config_string(&server.folder, var, val);
-	else if (!strcmp("imap.user", var))
-		return git_config_string(&server.user, var, val);
-	else if (!strcmp("imap.pass", var))
-		return git_config_string(&server.pass, var, val);
-	else if (!strcmp("imap.tunnel", var))
-		return git_config_string(&server.tunnel, var, val);
-	else if (!strcmp("imap.authmethod", var))
-		return git_config_string(&server.auth_method, var, val);
-	else if (!strcmp("imap.port", var))
-		server.port = git_config_int(var, val);
-	else if (!strcmp("imap.host", var)) {
+	git_config_get_bool("imap.sslverify", &server.ssl_verify);
+	git_config_get_bool("imap.preformattedhtml", &server.use_html);
+	git_config_get_string("imap.folder", &server.folder);
+
+	if (!git_config_get_value("imap.host", &val)) {
 		if (!val) {
 			git_die_config("imap.host", "Missing value for 'imap.host'");
 		} else {
@@ -1371,10 +1360,13 @@ static int git_imap_config(const char *var, const char *val, void *cb)
 				val += 2;
 			server.host = xstrdup(val);
 		}
-	} else
-		return git_default_config(var, val, cb);
+	}
 
-	return 0;
+	git_config_get_string("imap.user", &server.user);
+	git_config_get_string("imap.pass", &server.pass);
+	git_config_get_int("imap.port", &server.port);
+	git_config_get_string("imap.tunnel", &server.tunnel);
+	git_config_get_string("imap.authmethod", &server.auth_method);
 }
 
 static int append_msgs_to_imap(struct imap_server_conf *server,
@@ -1472,15 +1464,14 @@ static CURL *setup_curl(struct imap_server_conf *srvc, struct credential *cred)
 	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
 
 	if (0 < verbosity || getenv("GIT_CURL_VERBOSE"))
-		http_trace_curl_no_data();
+		curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
 	setup_curl_trace(curl);
 
 	return curl;
 }
 
 static int curl_append_msgs_to_imap(struct imap_server_conf *server,
-				    struct strbuf* all_msgs, int total)
-{
+				    struct strbuf* all_msgs, int total) {
 	int ofs = 0;
 	int n = 0;
 	struct buffer msgbuf = { STRBUF_INIT, 0 };
@@ -1547,7 +1538,7 @@ int cmd_main(int argc, const char **argv)
 	int nongit_ok;
 
 	setup_git_directory_gently(&nongit_ok);
-	git_config(git_imap_config, NULL);
+	git_imap_config();
 
 	argc = parse_options(argc, (const char **)argv, "", imap_send_options, imap_send_usage, 0);
 

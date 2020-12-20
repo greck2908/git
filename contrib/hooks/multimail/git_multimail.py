@@ -1,6 +1,6 @@
 #! /usr/bin/env python
 
-__version__ = '1.5.0'
+__version__ = '1.4.0'
 
 # Copyright (c) 2015-2016 Matthieu Moy and others
 # Copyright (c) 2012-2014 Michael Haggerty and others
@@ -64,9 +64,7 @@ except ImportError:
     # Python < 2.6 do not have ssl, but that's OK if we don't use it.
     pass
 import time
-
-import uuid
-import base64
+import cgi
 
 PYTHON3 = sys.version_info >= (3, 0)
 
@@ -75,7 +73,7 @@ if sys.version_info <= (2, 5):
         for element in iterable:
             if not element:
                 return False
-        return True
+            return True
 
 
 def is_ascii(s):
@@ -95,7 +93,7 @@ if PYTHON3:
     unicode = str
 
     def write_str(f, msg):
-        # Try outputting with the default encoding. If it fails,
+        # Try outputing with the default encoding. If it fails,
         # try UTF-8.
         try:
             f.buffer.write(msg.encode(sys.getdefaultencoding()))
@@ -110,12 +108,6 @@ if PYTHON3:
             return out.decode(sys.getdefaultencoding())
         except UnicodeEncodeError:
             return out.decode(ENCODING)
-
-    import html
-
-    def html_escape(s):
-        return html.escape(s)
-
 else:
     def is_string(s):
         try:
@@ -138,10 +130,6 @@ else:
     def next(it):
         return it.next()
 
-    import cgi
-
-    def html_escape(s):
-        return cgi.escape(s, True)
 
 try:
     from email.charset import Charset
@@ -202,7 +190,6 @@ Content-Transfer-Encoding: 8bit
 Message-ID: %(msgid)s
 From: %(fromaddr)s
 Reply-To: %(reply_to)s
-Thread-Index: %(thread_index)s
 X-Git-Host: %(fqdn)s
 X-Git-Repo: %(repo_shortname)s
 X-Git-Refname: %(refname)s
@@ -335,7 +322,6 @@ From: %(fromaddr)s
 Reply-To: %(reply_to)s
 In-Reply-To: %(reply_to_msgid)s
 References: %(reply_to_msgid)s
-Thread-Index: %(thread_index)s
 X-Git-Host: %(fqdn)s
 X-Git-Repo: %(repo_shortname)s
 X-Git-Refname: %(refname)s
@@ -777,9 +763,6 @@ class GitObject(object):
     def __eq__(self, other):
         return isinstance(other, GitObject) and self.sha1 == other.sha1
 
-    def __ne__(self, other):
-        return not self == other
-
     def __hash__(self):
         return hash(self.sha1)
 
@@ -869,7 +852,7 @@ class Change(object):
         if html_escape_val:
             for k in values:
                 if is_string(values[k]):
-                    values[k] = html_escape(values[k])
+                    values[k] = cgi.escape(values[k], True)
         for line in template.splitlines(True):
             yield line % values
 
@@ -926,7 +909,7 @@ class Change(object):
 
         raise NotImplementedError()
 
-    def generate_email_body(self, push):
+    def generate_email_body(self):
         """Generate the main part of the email body, a line at a time.
 
         The text in the body might be truncated after a specified
@@ -953,7 +936,7 @@ class Change(object):
             yield "<pre style='margin:0'>\n"
 
             for line in lines:
-                yield html_escape(line)
+                yield cgi.escape(line)
 
             yield '</pre>\n'
         else:
@@ -1028,7 +1011,7 @@ class Change(object):
                     fgcolor = '404040'
 
                 # Chop the trailing LF, we don't want it inside <pre>.
-                line = html_escape(line[:-1])
+                line = cgi.escape(line[:-1])
 
                 if bgcolor or fgcolor:
                     style = 'display:block; white-space:pre;'
@@ -1077,10 +1060,6 @@ class Revision(Change):
         self.author = read_git_output(['log', '--no-walk', '--format=%aN <%aE>', self.rev.sha1])
         self.recipients = self.environment.get_revision_recipients(self)
 
-        # -s is short for --no-patch, but -s works on older git's (e.g. 1.7)
-        self.parents = read_git_lines(['show', '-s', '--format=%P',
-                                      self.rev.sha1])[0].split()
-
         self.cc_recipients = ''
         if self.environment.get_scancommitforcc():
             self.cc_recipients = ', '.join(to.strip() for to in self._cc_recipients())
@@ -1111,7 +1090,6 @@ class Revision(Change):
             oneline = oneline[:max_subject_length - 6] + ' [...]'
 
         values['rev'] = self.rev.sha1
-        values['parents'] = ' '.join(self.parents)
         values['rev_short'] = self.rev.short
         values['change_type'] = self.change_type
         values['refname'] = self.refname
@@ -1119,7 +1097,6 @@ class Revision(Change):
         values['short_refname'] = self.reference_change.short_refname
         values['refname_type'] = self.reference_change.refname_type
         values['reply_to_msgid'] = self.reference_change.msgid
-        values['thread_index'] = self.reference_change.thread_index
         values['num'] = self.num
         values['tot'] = self.tot
         values['recipients'] = self.recipients
@@ -1267,23 +1244,6 @@ class ReferenceChange(Change):
             old=old, new=new, rev=rev,
             )
 
-    @staticmethod
-    def make_thread_index():
-        """Return a string appropriate for the Thread-Index header,
-        needed by MS Outlook to get threading right.
-
-        The format is (base64-encoded):
-        - 1 byte must be 1
-        - 5 bytes encode a date (hardcoded here)
-        - 16 bytes for a globally unique identifier
-
-        FIXME: Unfortunately, even with the Thread-Index field, MS
-        Outlook doesn't seem to do the threading reliably (see
-        https://github.com/git-multimail/git-multimail/pull/194).
-        """
-        thread_index = b'\x01\x00\x00\x12\x34\x56' + uuid.uuid4().bytes
-        return base64.standard_b64encode(thread_index).decode('ascii')
-
     def __init__(self, environment, refname, short_refname, old, new, rev):
         Change.__init__(self, environment)
         self.change_type = {
@@ -1297,7 +1257,6 @@ class ReferenceChange(Change):
         self.new = new
         self.rev = rev
         self.msgid = make_msgid()
-        self.thread_index = self.make_thread_index()
         self.diffopts = environment.diffopts
         self.graphopts = environment.graphopts
         self.logopts = environment.logopts
@@ -1317,7 +1276,6 @@ class ReferenceChange(Change):
         values['refname'] = self.refname
         values['short_refname'] = self.short_refname
         values['msgid'] = self.msgid
-        values['thread_index'] = self.thread_index
         values['recipients'] = self.recipients
         values['oldrev'] = str(self.old)
         values['oldrev_short'] = self.old.short
@@ -1983,9 +1941,6 @@ class Mailer(object):
     def __init__(self, environment):
         self.environment = environment
 
-    def close(self):
-        pass
-
     def send(self, lines, to_addrs):
         """Send an email consisting of lines.
 
@@ -2099,7 +2054,6 @@ class SMTPMailer(Mailer):
         self.username = smtpuser
         self.password = smtppass
         self.smtpcacerts = smtpcacerts
-        self.loggedin = False
         try:
             def call(klass, server, timeout):
                 try:
@@ -2129,7 +2083,7 @@ class SMTPMailer(Mailer):
                 # equivalent to
                 #     self.smtp.ehlo()
                 #     self.smtp.starttls()
-                # with access to the ssl layer
+                # with acces to the ssl layer
                 self.smtp.ehlo()
                 if not self.smtp.has_extn("starttls"):
                     raise smtplib.SMTPException("STARTTLS extension not supported by server")
@@ -2148,7 +2102,7 @@ class SMTPMailer(Mailer):
                         cert_reqs=ssl.CERT_NONE
                         )
                     self.environment.get_logger().error(
-                        '*** Warning, the server certificate is not verified (smtp) ***\n'
+                        '*** Warning, the server certificat is not verified (smtp) ***\n'
                         '***          set the option smtpCACerts                   ***\n'
                         )
                 if not hasattr(self.smtp.sock, "read"):
@@ -2176,30 +2130,20 @@ class SMTPMailer(Mailer):
                 % (self.smtpserver, sys.exc_info()[1]))
             sys.exit(1)
 
-    def close(self):
+    def __del__(self):
         if hasattr(self, 'smtp'):
             self.smtp.quit()
             del self.smtp
 
-    def __del__(self):
-        self.close()
-
     def send(self, lines, to_addrs):
         try:
             if self.username or self.password:
-                if not self.loggedin:
-                    self.smtp.login(self.username, self.password)
-                    self.loggedin = True
+                self.smtp.login(self.username, self.password)
             msg = ''.join(lines)
             # turn comma-separated list into Python list if needed.
             if is_string(to_addrs):
                 to_addrs = [email for (name, email) in getaddresses([to_addrs])]
             self.smtp.sendmail(self.envelopesender, to_addrs, msg)
-        except socket.timeout:
-            self.environment.get_logger().error(
-                '*** Error sending email ***\n'
-                '*** SMTP server timed out (timeout is %s)\n'
-                % self.smtpservertimeout)
         except smtplib.SMTPResponseException:
             err = sys.exc_info()[1]
             self.environment.get_logger().error(
@@ -2227,8 +2171,7 @@ class OutputMailer(Mailer):
 
     SEPARATOR = '=' * 75 + '\n'
 
-    def __init__(self, f, environment=None):
-        super(OutputMailer, self).__init__(environment=environment)
+    def __init__(self, f):
         self.f = f
 
     def send(self, lines, to_addrs):
@@ -2439,7 +2382,6 @@ class Environment(object):
         self.html_in_footer = False
         self.commitBrowseURL = None
         self.maxcommitemails = 500
-        self.excludemergerevisions = False
         self.diffopts = ['--stat', '--summary', '--find-copies-harder']
         self.graphopts = ['--oneline', '--decorate']
         self.logopts = []
@@ -2678,8 +2620,6 @@ class ConfigOptionsEnvironmentMixin(ConfigEnvironmentMixin):
             self.html_in_footer = html_in_footer
 
         self.commitBrowseURL = config.get('commitBrowseURL')
-
-        self.excludemergerevisions = config.get('excludeMergeRevisions')
 
         maxcommitemails = config.get('maxcommitemails')
         if maxcommitemails is not None:
@@ -3189,7 +3129,7 @@ class ProjectdescEnvironmentMixin(Environment):
         self.COMPUTED_KEYS += ['projectdesc']
 
     def get_projectdesc(self):
-        """Return a one-line description of the project."""
+        """Return a one-line descripition of the project."""
 
         git_dir = get_git_dir()
         try:
@@ -3212,10 +3152,7 @@ class GitoliteEnvironmentHighPrecMixin(Environment):
         return self.osenv.get('GL_USER', 'unknown user')
 
 
-class GitoliteEnvironmentLowPrecMixin(
-        ConfigEnvironmentMixin,
-        Environment):
-
+class GitoliteEnvironmentLowPrecMixin(Environment):
     def get_repo_shortname(self):
         # The gitolite environment variable $GL_REPO is a pretty good
         # repo_shortname (though it's probably not as good as a value
@@ -3224,16 +3161,6 @@ class GitoliteEnvironmentLowPrecMixin(
             self.osenv.get('GL_REPO', None) or
             super(GitoliteEnvironmentLowPrecMixin, self).get_repo_shortname()
             )
-
-    @staticmethod
-    def _compile_regex(re_template):
-        return (
-            re.compile(re_template % x)
-            for x in (
-                r'BEGIN\s+USER\s+EMAILS',
-                r'([^\s]+)\s+(.*)',
-                r'END\s+USER\s+EMAILS',
-                ))
 
     def get_fromaddr(self, change=None):
         GL_USER = self.osenv.get('GL_USER')
@@ -3247,42 +3174,18 @@ class GitoliteEnvironmentLowPrecMixin(
             GL_CONF = self.osenv.get(
                 'GL_CONF',
                 os.path.join(GL_ADMINDIR, 'conf', 'gitolite.conf'))
-
-            mailaddress_map = self.config.get('MailaddressMap')
-            # If relative, consider relative to GL_CONF:
-            if mailaddress_map:
-                mailaddress_map = os.path.join(os.path.dirname(GL_CONF),
-                                               mailaddress_map)
-                if os.path.isfile(mailaddress_map):
-                    f = open(mailaddress_map, 'rU')
-                    try:
-                        # Leading '#' is optional
-                        re_begin, re_user, re_end = self._compile_regex(
-                            r'^(?:\s*#)?\s*%s\s*$')
-                        for l in f:
-                            l = l.rstrip('\n')
-                            if re_begin.match(l) or re_end.match(l):
-                                continue  # Ignore these lines
-                            m = re_user.match(l)
-                            if m:
-                                if m.group(1) == GL_USER:
-                                    return m.group(2)
-                                else:
-                                    continue  # Not this user, but not an error
-                            raise ConfigurationException(
-                                "Syntax error in mail address map.\n"
-                                "Check file {}.\n"
-                                "Line: {}".format(mailaddress_map, l))
-
-                    finally:
-                        f.close()
-
             if os.path.isfile(GL_CONF):
                 f = open(GL_CONF, 'rU')
                 try:
                     in_user_emails_section = False
-                    re_begin, re_user, re_end = self._compile_regex(
-                        r'^\s*#\s*%s\s*$')
+                    re_template = r'^\s*#\s*%s\s*$'
+                    re_begin, re_user, re_end = (
+                        re.compile(re_template % x)
+                        for x in (
+                            r'BEGIN\s+USER\s+EMAILS',
+                            re.escape(GL_USER) + r'\s+(.*)',
+                            r'END\s+USER\s+EMAILS',
+                            ))
                     for l in f:
                         l = l.rstrip('\n')
                         if not in_user_emails_section:
@@ -3292,8 +3195,8 @@ class GitoliteEnvironmentLowPrecMixin(
                         if re_end.match(l):
                             break
                         m = re_user.match(l)
-                        if m and m.group(1) == GL_USER:
-                            return m.group(2)
+                        if m:
+                            return m.group(1)
                 finally:
                     f.close()
         return super(GitoliteEnvironmentLowPrecMixin, self).get_fromaddr(change)
@@ -3325,7 +3228,7 @@ class StashEnvironmentHighPrecMixin(Environment):
         self.__repo = repo
 
     def get_pusher(self):
-        return re.match(r'(.*?)\s*<', self.__user).group(1)
+        return re.match('(.*?)\s*<', self.__user).group(1)
 
     def get_pusher_email(self):
         return self.__user
@@ -3359,7 +3262,7 @@ class GerritEnvironmentHighPrecMixin(Environment):
             if self.__submitter.find('<') != -1:
                 # Submitter has a configured email, we transformed
                 # __submitter into an RFC 2822 string already.
-                return re.match(r'(.*?)\s*<', self.__submitter).group(1)
+                return re.match('(.*?)\s*<', self.__submitter).group(1)
             else:
                 # Submitter has no configured email, it's just his name.
                 return self.__submitter
@@ -3712,9 +3615,6 @@ class Push(object):
 
             for (num, sha1) in enumerate(sha1s):
                 rev = Revision(change, GitObject(sha1), num=num + 1, tot=len(sha1s))
-                if len(rev.parents) > 1 and change.environment.excludemergerevisions:
-                    # skipping a merge commit
-                    continue
                 if not rev.recipients and rev.cc_recipients:
                     change.environment.log_msg('*** Replacing Cc: with To:')
                     rev.recipients = rev.cc_recipients
@@ -3764,14 +3664,11 @@ def run_as_post_receive_hook(environment, mailer):
         changes.append(
             ReferenceChange.create(environment, oldrev, newrev, refname)
             )
-    if not changes:
-        mailer.close()
-        return
-    push = Push(environment, changes)
-    try:
+    if changes:
+        push = Push(environment, changes)
         push.send_emails(mailer, body_filter=environment.filter_body)
-    finally:
-        mailer.close()
+    if hasattr(mailer, '__del__'):
+        mailer.__del__()
 
 
 def run_as_update_hook(environment, mailer, refname, oldrev, newrev, force_send=False):
@@ -3790,14 +3687,10 @@ def run_as_update_hook(environment, mailer, refname, oldrev, newrev, force_send=
             refname,
             ),
         ]
-    if not changes:
-        mailer.close()
-        return
     push = Push(environment, changes, force_send)
-    try:
-        push.send_emails(mailer, body_filter=environment.filter_body)
-    finally:
-        mailer.close()
+    push.send_emails(mailer, body_filter=environment.filter_body)
+    if hasattr(mailer, '__del__'):
+        mailer.__del__()
 
 
 def check_ref_filter(environment):
@@ -3967,7 +3860,7 @@ def build_environment_klass(env_name):
         low_prec_mixin = known_env['lowprec']
         environment_mixins.append(low_prec_mixin)
     environment_mixins.append(Environment)
-    klass_name = env_name.capitalize() + 'Environment'
+    klass_name = env_name.capitalize() + 'Environement'
     environment_klass = type(
         klass_name,
         tuple(environment_mixins),
@@ -4164,21 +4057,21 @@ class Logger(object):
                 environment, 'git_multimail.error', environment.error_log_file, logging.ERROR)
             self.loggers.append(error_log_file)
 
-    def info(self, msg, *args, **kwargs):
+    def info(self, msg):
         for l in self.loggers:
-            l.info(msg, *args, **kwargs)
+            l.info(msg)
 
-    def debug(self, msg, *args, **kwargs):
+    def debug(self, msg):
         for l in self.loggers:
-            l.debug(msg, *args, **kwargs)
+            l.debug(msg)
 
-    def warning(self, msg, *args, **kwargs):
+    def warning(self, msg):
         for l in self.loggers:
-            l.warning(msg, *args, **kwargs)
+            l.warning(msg)
 
-    def error(self, msg, *args, **kwargs):
+    def error(self, msg):
         for l in self.loggers:
-            l.error(msg, *args, **kwargs)
+            l.error(msg)
 
 
 def main(args):
@@ -4296,7 +4189,7 @@ def main(args):
             show_env(environment, sys.stderr)
 
         if options.stdout or environment.stdout:
-            mailer = OutputMailer(sys.stdout, environment)
+            mailer = OutputMailer(sys.stdout)
         else:
             mailer = choose_mailer(config, environment)
 
@@ -4340,7 +4233,6 @@ def main(args):
         except:
             sys.stderr.write(msg)
         sys.exit(1)
-
 
 if __name__ == '__main__':
     main(sys.argv[1:])

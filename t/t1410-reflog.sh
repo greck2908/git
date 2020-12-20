@@ -20,23 +20,24 @@ check_have () {
 }
 
 check_fsck () {
-	git fsck --full >fsck.output
+	output=$(git fsck --full)
 	case "$1" in
 	'')
-		test_must_be_empty fsck.output ;;
+		test -z "$output" ;;
 	*)
-		test_i18ngrep "$1" fsck.output ;;
+		echo "$output" | grep "$1" ;;
 	esac
 }
 
 corrupt () {
-	mv .git/objects/$(test_oid_to_path $1) .git/$1
+	aa=${1%??????????????????????????????????????} zz=${1#??}
+	mv .git/objects/$aa/$zz .git/$aa$zz
 }
 
 recover () {
-	aa=$(echo $1 | cut -c 1-2)
+	aa=${1%??????????????????????????????????????} zz=${1#??}
 	mkdir -p .git/objects/$aa
-	mv .git/$1 .git/objects/$(test_oid_to_path $1)
+	mv .git/$aa$zz .git/objects/$aa/$zz
 }
 
 check_dont_have () {
@@ -194,7 +195,7 @@ test_expect_success 'delete' '
 
 	git reflog delete master@{1} &&
 	git reflog show master > output &&
-	test_line_count = $(($master_entry_count - 1)) output &&
+	test $(($master_entry_count - 1)) = $(wc -l < output) &&
 	test $HEAD_entry_count = $(git reflog | wc -l) &&
 	! grep ox < output &&
 
@@ -208,7 +209,7 @@ test_expect_success 'delete' '
 
 	git reflog delete master@{07.04.2005.15:15:00.-0700} &&
 	git reflog show master > output &&
-	test_line_count = $(($master_entry_count - 1)) output &&
+	test $(($master_entry_count - 1)) = $(wc -l < output) &&
 	! grep dragon < output
 
 '
@@ -231,34 +232,25 @@ test_expect_success '--expire=never' '
 '
 
 test_expect_success 'gc.reflogexpire=never' '
-	test_config gc.reflogexpire never &&
-	test_config gc.reflogexpireunreachable never &&
 
-	git reflog expire --verbose --all >output &&
-	test_line_count = 9 output &&
-
+	git config gc.reflogexpire never &&
+	git config gc.reflogexpireunreachable never &&
+	git reflog expire --verbose --all &&
 	git reflog refs/heads/master >output &&
 	test_line_count = 4 output
 '
 
 test_expect_success 'gc.reflogexpire=false' '
-	test_config gc.reflogexpire false &&
-	test_config gc.reflogexpireunreachable false &&
 
+	git config gc.reflogexpire false &&
+	git config gc.reflogexpireunreachable false &&
 	git reflog expire --verbose --all &&
 	git reflog refs/heads/master >output &&
-	test_line_count = 4 output
+	test_line_count = 4 output &&
 
-'
+	git config --unset gc.reflogexpire &&
+	git config --unset gc.reflogexpireunreachable
 
-test_expect_success 'git reflog expire unknown reference' '
-	test_config gc.reflogexpire never &&
-	test_config gc.reflogexpireunreachable never &&
-
-	test_must_fail git reflog expire master@{123} 2>stderr &&
-	test_i18ngrep "points nowhere" stderr &&
-	test_must_fail git reflog expire does-not-exist 2>stderr &&
-	test_i18ngrep "points nowhere" stderr
 '
 
 test_expect_success 'checkout should not delete log for packed ref' '
@@ -298,8 +290,9 @@ test_expect_success 'stale dirs do not cause d/f conflicts (reflogs off)' '
 	# same as before, but we only create a reflog for "one" if
 	# it already exists, which it does not
 	git -c core.logallrefupdates=false branch one master &&
+	: >expect &&
 	git log -g --format="%gd %gs" one >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 '
 
 # Triggering the bug detected by this test requires a newline to fall
@@ -312,12 +305,12 @@ test_expect_success 'stale dirs do not cause d/f conflicts (reflogs off)' '
 # Each line is 114 characters, so we need 75 to still have a few before the
 # last 8K. The 89-character padding on the final entry lines up our
 # newline exactly.
-test_expect_success SHA1 'parsing reverse reflogs at BUFSIZ boundaries' '
+test_expect_success 'parsing reverse reflogs at BUFSIZ boundaries' '
 	git checkout -b reflogskip &&
-	zf=$(test_oid zero_2) &&
+	z38=00000000000000000000000000000000000000 &&
 	ident="abc <xyz> 0000000001 +0000" &&
 	for i in $(test_seq 1 75); do
-		printf "$zf%02d $zf%02d %s\t" $i $(($i+1)) "$ident" &&
+		printf "$z38%02d $z38%02d %s\t" $i $(($i+1)) "$ident" &&
 		if test $i = 75; then
 			for j in $(test_seq 1 89); do
 				printf X
@@ -328,7 +321,7 @@ test_expect_success SHA1 'parsing reverse reflogs at BUFSIZ boundaries' '
 		printf "\n"
 	done >.git/logs/refs/heads/reflogskip &&
 	git rev-parse reflogskip@{73} >actual &&
-	echo ${zf}03 >expect &&
+	echo ${z38}03 >expect &&
 	test_cmp expect actual
 '
 
@@ -346,8 +339,8 @@ test_expect_failure 'reflog with non-commit entries displays all entries' '
 '
 
 test_expect_success 'reflog expire operates on symref not referrent' '
-	git branch --create-reflog the_symref &&
-	git branch --create-reflog referrent &&
+	git branch -l the_symref &&
+	git branch -l referrent &&
 	git update-ref referrent HEAD &&
 	git symbolic-ref refs/heads/the_symref refs/heads/referrent &&
 	test_when_finished "rm -f .git/refs/heads/referrent.lock" &&
@@ -373,21 +366,6 @@ test_expect_success 'continue walking past root commits' '
 		test_commit orphan2-1 &&
 		git log -g --format="%gd %gs" >actual &&
 		test_cmp expect actual
-	)
-'
-
-test_expect_success 'expire with multiple worktrees' '
-	git init main-wt &&
-	(
-		cd main-wt &&
-		test_tick &&
-		test_commit foo &&
-		git  worktree add link-wt &&
-		test_tick &&
-		test_commit -C link-wt foobar &&
-		test_tick &&
-		git reflog expire --verbose --all --expire=$test_tick &&
-		test_must_be_empty .git/worktrees/link-wt/logs/HEAD
 	)
 '
 

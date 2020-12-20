@@ -39,12 +39,28 @@ native_path () {
 	then
 		path=$(cygpath --windows "$path")
 	else
-		path=$(test-tool path-utils real_path "$path")
+		path=$(test-path-utils real_path "$path")
 	fi &&
 	echo "$path"
 }
 
-test_set_port P4DPORT
+# On Solaris the 'date +%s' function is not supported and therefore we
+# need this replacement.
+# Attention: This function is not safe again against time offset updates
+# at runtime (e.g. via NTP). The 'clock_gettime(CLOCK_MONOTONIC)'
+# function could fix that but it is not in Python until 3.3.
+time_in_seconds () {
+	(cd / && "$PYTHON_PATH" -c 'import time; print(int(time.time()))')
+}
+
+# Try to pick a unique port: guess a large number, then hope
+# no more than one of each test is running.
+#
+# This does not handle the case where somebody else is running the
+# same tests and has chosen the same ports.
+testid=${this_test#t}
+git_p4_test_start=9800
+P4DPORT=$((10669 + ($testid - $git_p4_test_start)))
 
 P4PORT=localhost:$P4DPORT
 P4CLIENT=client
@@ -58,9 +74,14 @@ cli="$TRASH_DIRECTORY/cli"
 git="$TRASH_DIRECTORY/git"
 pidfile="$TRASH_DIRECTORY/p4d.pid"
 
-stop_p4d_and_watchdog () {
-	kill -9 $p4d_pid $watchdog_pid
+# Sometimes "prove" seems to hang on exit because p4d is still running
+cleanup () {
+	if test -f "$pidfile"
+	then
+		kill -9 $(cat "$pidfile") 2>/dev/null && exit 255
+	fi
 }
+trap cleanup EXIT
 
 # git p4 submit generates a temp file, which will
 # not get cleaned up if the submission fails.  Don't
@@ -68,16 +89,7 @@ stop_p4d_and_watchdog () {
 TMPDIR="$TRASH_DIRECTORY"
 export TMPDIR
 
-registered_stop_p4d_atexit_handler=
 start_p4d () {
-	# One of the test scripts stops and then re-starts p4d.
-	# Don't register and then run the same atexit handlers several times.
-	if test -z "$registered_stop_p4d_atexit_handler"
-	then
-		test_atexit 'stop_p4d_and_watchdog'
-		registered_stop_p4d_atexit_handler=AlreadyDone
-	fi
-
 	mkdir -p "$db" "$cli" "$git" &&
 	rm -f "$pidfile" &&
 	(
@@ -87,7 +99,6 @@ start_p4d () {
 			echo $! >"$pidfile"
 		}
 	) &&
-	p4d_pid=$(cat "$pidfile")
 
 	# This gives p4d a long time to start up, as it can be
 	# quite slow depending on the machine.  Set this environment
@@ -95,18 +106,18 @@ start_p4d () {
 	# an automated test setup.  If the p4d process dies, that
 	# will be caught with the "kill -0" check below.
 	i=${P4D_START_PATIENCE:-300}
+	pid=$(cat "$pidfile")
 
-	nr_tries_left=$P4D_TIMEOUT
+	timeout=$(($(time_in_seconds) + $P4D_TIMEOUT))
 	while true
 	do
-		if test $nr_tries_left -eq 0
+		if test $(time_in_seconds) -gt $timeout
 		then
-			kill -9 $p4d_pid
+			kill -9 $pid
 			exit 1
 		fi
 		sleep 1
-		nr_tries_left=$(($nr_tries_left - 1))
-	done 2>/dev/null 4>&2 &
+	done &
 	watchdog_pid=$!
 
 	ready=
@@ -119,7 +130,7 @@ start_p4d () {
 			break
 		fi
 		# fail if p4d died
-		kill -0 $p4d_pid 2>/dev/null || break
+		kill -0 $pid 2>/dev/null || break
 		echo waiting for p4d to start
 		sleep 1
 		i=$(( $i - 1 ))
@@ -159,23 +170,34 @@ p4_add_job () {
 }
 
 retry_until_success () {
-	nr_tries_left=$RETRY_TIMEOUT
-	until "$@" 2>/dev/null || test $nr_tries_left -eq 0
+	timeout=$(($(time_in_seconds) + $RETRY_TIMEOUT))
+	until "$@" 2>/dev/null || test $(time_in_seconds) -gt $timeout
 	do
 		sleep 1
-		nr_tries_left=$(($nr_tries_left - 1))
 	done
 }
 
-stop_and_cleanup_p4d () {
-	kill -9 $p4d_pid $watchdog_pid
-	wait $p4d_pid
-	rm -rf "$db" "$cli" "$pidfile"
+retry_until_fail () {
+	timeout=$(($(time_in_seconds) + $RETRY_TIMEOUT))
+	until ! "$@" 2>/dev/null || test $(time_in_seconds) -gt $timeout
+	do
+		sleep 1
+	done
+}
+
+kill_p4d () {
+	pid=$(cat "$pidfile")
+	retry_until_fail kill $pid
+	retry_until_fail kill -9 $pid
+	# complain if it would not die
+	test_must_fail kill $pid >/dev/null 2>&1 &&
+	rm -rf "$db" "$cli" "$pidfile" &&
+	retry_until_fail kill -9 $watchdog_pid
 }
 
 cleanup_git () {
 	retry_until_success rm -r "$git"
-	test_path_is_missing "$git" &&
+	test_must_fail test -d "$git" &&
 	retry_until_success mkdir "$git"
 }
 

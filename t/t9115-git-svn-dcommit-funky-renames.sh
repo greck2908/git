@@ -120,4 +120,6 @@ test_expect_success !MINGW,!UTF8_NFD_TO_NFC 'svn.pathnameencoding=cp932 rename o
 	git svn dcommit
 '
 
+stop_httpd
+
 test_done

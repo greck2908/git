@@ -114,10 +114,11 @@ test_expect_success 'Exclusion in a non-XDG global ignore file' '
 '
 
 test_expect_success 'Checking XDG ignore file when HOME is unset' '
+	>expected &&
 	(sane_unset HOME &&
 	 git config --unset core.excludesfile &&
 	 git ls-files --exclude-standard --ignored >actual) &&
-	test_must_be_empty actual
+	test_cmp expected actual
 '
 
 test_expect_success 'Checking attributes in the XDG attributes file' '
@@ -131,9 +132,10 @@ test_expect_success 'Checking attributes in the XDG attributes file' '
 '
 
 test_expect_success 'Checking XDG attributes when HOME is unset' '
+	>expected &&
 	(sane_unset HOME &&
 	 git check-attr -a f >actual) &&
-	test_must_be_empty actual
+	test_cmp expected actual
 '
 
 test_expect_success '$XDG_CONFIG_HOME overrides $HOME/.config/git/attributes' '
@@ -153,7 +155,7 @@ test_expect_success 'Checking attributes in both XDG and local attributes files'
 
 
 test_expect_success 'Checking attributes in a non-XDG global attributes file' '
-	rm -f .gitattributes &&
+	test_might_fail rm .gitattributes &&
 	echo "f attr_f=test" >"$HOME"/my_gitattributes &&
 	git config core.attributesfile "$HOME"/my_gitattributes &&
 	echo "f: attr_f: test" >expected &&
@@ -165,7 +167,7 @@ test_expect_success 'Checking attributes in a non-XDG global attributes file' '
 test_expect_success 'write: xdg file exists and ~/.gitconfig doesn'\''t' '
 	mkdir -p "$HOME"/.config/git &&
 	>"$HOME"/.config/git/config &&
-	rm -f "$HOME"/.gitconfig &&
+	test_might_fail rm "$HOME"/.gitconfig &&
 	git config --global user.name "write_config" &&
 	echo "[user]" >expected &&
 	echo "	name = write_config" >>expected &&
@@ -183,8 +185,8 @@ test_expect_success 'write: xdg file exists and ~/.gitconfig exists' '
 
 
 test_expect_success 'write: ~/.config/git/ exists and config file doesn'\''t' '
-	rm -f "$HOME"/.gitconfig &&
-	rm -f "$HOME"/.config/git/config &&
+	test_might_fail rm "$HOME"/.gitconfig &&
+	test_might_fail rm "$HOME"/.config/git/config &&
 	git config --global user.name "write_gitconfig" &&
 	echo "[user]" >expected &&
 	echo "	name = write_gitconfig" >>expected &&

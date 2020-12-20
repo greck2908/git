@@ -5,43 +5,32 @@
  *
  * The mtime can be changed to an absolute value:
  *
- *	test-tool chmtime =<seconds> file...
+ *	test-chmtime =<seconds> file...
  *
  * Relative to the current time as returned by time(3):
  *
- *	test-tool chmtime =+<seconds> (or =-<seconds>) file...
+ *	test-chmtime =+<seconds> (or =-<seconds>) file...
  *
  * Or relative to the current mtime of the file:
  *
- *	test-tool chmtime <seconds> file...
- *	test-tool chmtime +<seconds> (or -<seconds>) file...
+ *	test-chmtime <seconds> file...
+ *	test-chmtime +<seconds> (or -<seconds>) file...
  *
  * Examples:
  *
- * To print the mtime and the file name use --verbose and set
- * the file mtime offset to 0:
+ * To just print the mtime use --verbose and set the file mtime offset to 0:
  *
- *	test-tool chmtime -v +0 file
- *
- * To print only the mtime use --get:
- *
- *	test-tool chmtime --get file
+ *	test-chmtime -v +0 file
  *
  * To set the mtime to current time:
  *
- *	test-tool chmtime =+0 file
- *
- * To set the file mtime offset to +1 and print the new value:
- *
- *	test-tool chmtime --get +1 file
+ *	test-chmtime =+0 file
  *
  */
-#include "test-tool.h"
 #include "git-compat-util.h"
 #include <utime.h>
 
-static const char usage_str[] =
-	"(-v|--verbose|-g|--get) (+|=|=+|=-|-)<seconds> <file>...";
+static const char usage_str[] = "-v|--verbose (+|=|=+|=-|-)<seconds> <file>...";
 
 static int timespec_arg(const char *arg, long int *set_time, int *set_eq)
 {
@@ -57,6 +46,7 @@ static int timespec_arg(const char *arg, long int *set_time, int *set_eq)
 	}
 	*set_time = strtol(timespec, &test, 10);
 	if (*test) {
+		fprintf(stderr, "Not a base-10 integer: %s\n", arg + 1);
 		return 0;
 	}
 	if ((*set_eq && *set_time < 0) || *set_eq == 2) {
@@ -66,10 +56,9 @@ static int timespec_arg(const char *arg, long int *set_time, int *set_eq)
 	return 1;
 }
 
-int cmd__chmtime(int argc, const char **argv)
+int cmd_main(int argc, const char **argv)
 {
 	static int verbose;
-	static int get;
 
 	int i = 1;
 	/* no mtime change by default */
@@ -79,34 +68,18 @@ int cmd__chmtime(int argc, const char **argv)
 	if (argc < 3)
 		goto usage;
 
-	if (strcmp(argv[i], "--get") == 0 || strcmp(argv[i], "-g") == 0) {
-		get = 1;
-		++i;
-	} else if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0) {
+	if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0) {
 		verbose = 1;
 		++i;
 	}
-
-	if (i == argc) {
-		goto usage;
-	}
-
-	if (timespec_arg(argv[i], &set_time, &set_eq)) {
+	if (timespec_arg(argv[i], &set_time, &set_eq))
 		++i;
-	} else {
-		if (get == 0) {
-			fprintf(stderr, "Not a base-10 integer: %s\n", argv[i] + 1);
-			goto usage;
-		}
-	}
-
-	if (i == argc)
+	else
 		goto usage;
 
 	for (; i < argc; i++) {
 		struct stat sb;
 		struct utimbuf utb;
-		uintmax_t mtime;
 
 		if (stat(argv[i], &sb) < 0) {
 			fprintf(stderr, "Failed to stat %s: %s\n",
@@ -126,10 +99,8 @@ int cmd__chmtime(int argc, const char **argv)
 		utb.actime = sb.st_atime;
 		utb.modtime = set_eq ? set_time : sb.st_mtime + set_time;
 
-		mtime = utb.modtime < 0 ? 0: utb.modtime;
-		if (get) {
-			printf("%"PRIuMAX"\n", mtime);
-		} else if (verbose) {
+		if (verbose) {
+			uintmax_t mtime = utb.modtime < 0 ? 0: utb.modtime;
 			printf("%"PRIuMAX"\t%s\n", mtime, argv[i]);
 		}
 

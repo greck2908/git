@@ -4,8 +4,7 @@
 /**
  * The string_list API offers a data structure and functions to handle
  * sorted and unsorted arrays of strings.  A "sorted" list is one whose
- * entries are sorted by string value in the order specified by the `cmp`
- * member (`strcmp()` by default).
+ * entries are sorted by string value in `strcmp()` order.
  *
  * The caller:
  *
@@ -115,6 +114,14 @@ void filter_string_list(struct string_list *list, int free_util,
 			string_list_each_func_t want, void *cb_data);
 
 /**
+ * Dump a string_list to stdout, useful mainly for debugging
+ * purposes. It can take an optional header argument and it writes out
+ * the string-pointer pairs of the string_list, each one in its own
+ * line.
+ */
+void print_string_list(const struct string_list *p, const char *text);
+
+/**
  * Free a string_list. The `string` pointer of the items will be freed
  * in case the `strdup_strings` member of the string_list is set. The
  * second parameter controls if the `util` pointer of the items should
@@ -175,12 +182,12 @@ struct string_list_item *string_list_insert(struct string_list *list, const char
  * Remove the given string from the sorted list.  If the string
  * doesn't exist, the list is not altered.
  */
-void string_list_remove(struct string_list *list, const char *string,
-			int free_util);
+extern void string_list_remove(struct string_list *list, const char *string,
+			       int free_util);
 
 /**
  * Check if the given string is part of a sorted list. If it is part of the list,
- * return the corresponding string_list_item, NULL otherwise.
+ * return the coresponding string_list_item, NULL otherwise.
  */
 struct string_list_item *string_list_lookup(struct string_list *list, const char *string);
 
@@ -210,8 +217,7 @@ struct string_list_item *string_list_append(struct string_list *list, const char
 struct string_list_item *string_list_append_nodup(struct string_list *list, char *string);
 
 /**
- * Sort the list's entries by string value in order specified by list->cmp
- * (strcmp() if list->cmp is NULL).
+ * Sort the list's entries by string value in `strcmp()` order.
  */
 void string_list_sort(struct string_list *list);
 

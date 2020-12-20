@@ -16,8 +16,8 @@ DESCRIPTION
 The command takes various subcommands, and different options depending
 on the subcommand:
 
- git bisect start [--term-{new,bad}=<term> --term-{old,good}=<term>]
-		  [--no-checkout] [--first-parent] [<bad> [<good>...]] [--] [<paths>...]
+ git bisect start [--term-{old,good}=<term> --term-{new,bad}=<term>]
+		  [--no-checkout] [<bad> [<good>...]] [--] [<paths>...]
  git bisect (bad|new|<term-new>) [<rev>]
  git bisect (good|old|<term-old>) [<rev>...]
  git bisect terms [--term-good | --term-bad]
@@ -165,8 +165,8 @@ To get a reminder of the currently used terms, use
 git bisect terms
 ------------------------------------------------
 
-You can get just the old (respectively new) term with `git bisect terms
---term-old` or `git bisect terms --term-good`.
+You can get just the old (respectively new) term with `git bisect term
+--term-old` or `git bisect term --term-good`.
 
 If you would like to use your own terms instead of "bad"/"good" or
 "new"/"old", you can choose any names you like (except existing bisect
@@ -365,17 +365,6 @@ does not require a checked out tree.
 +
 If the repository is bare, `--no-checkout` is assumed.
 
---first-parent::
-+
-Follow only the first parent commit upon seeing a merge commit.
-+
-In detecting regressions introduced through the merging of a branch, the merge
-commit will be identified as introduction of the bug and its ancestors will be
-ignored.
-+
-This option is particularly useful in avoiding false positives when a merged
-branch contained broken or non-buildable commits, but the merge itself was OK.
-
 EXAMPLES
 --------
 
@@ -424,7 +413,7 @@ $ cat ~/test.sh
 
 # tweak the working tree by merging the hot-fix branch
 # and then attempt a build
-if	git merge --no-commit --no-ff hot-fix &&
+if	git merge --no-commit hot-fix &&
 	make
 then
 	# run project specific test and report its status

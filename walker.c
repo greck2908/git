@@ -1,14 +1,11 @@
 #include "cache.h"
 #include "walker.h"
-#include "repository.h"
-#include "object-store.h"
 #include "commit.h"
 #include "tree.h"
 #include "tree-walk.h"
 #include "tag.h"
 #include "blob.h"
 #include "refs.h"
-#include "progress.h"
 
 static struct object_id current_commit_oid;
 
@@ -25,7 +22,7 @@ void walker_say(struct walker *walker, const char *fmt, ...)
 static void report_missing(const struct object *obj)
 {
 	fprintf(stderr, "Cannot obtain needed %s %s\n",
-		obj->type ? type_name(obj->type): "object",
+		obj->type ? typename(obj->type): "object",
 		oid_to_hex(&obj->oid));
 	if (!is_null_oid(&current_commit_oid))
 		fprintf(stderr, "while processing commit %s.\n",
@@ -50,14 +47,12 @@ static int process_tree(struct walker *walker, struct tree *tree)
 		if (S_ISGITLINK(entry.mode))
 			continue;
 		if (S_ISDIR(entry.mode)) {
-			struct tree *tree = lookup_tree(the_repository,
-							&entry.oid);
+			struct tree *tree = lookup_tree(entry.oid);
 			if (tree)
 				obj = &tree->object;
 		}
 		else {
-			struct blob *blob = lookup_blob(the_repository,
-							&entry.oid);
+			struct blob *blob = lookup_blob(entry.oid);
 			if (blob)
 				obj = &blob->object;
 		}
@@ -77,8 +72,6 @@ static struct commit_list *complete = NULL;
 
 static int process_commit(struct walker *walker, struct commit *commit)
 {
-	struct commit_list *parents;
-
 	if (parse_commit(commit))
 		return -1;
 
@@ -93,14 +86,19 @@ static int process_commit(struct walker *walker, struct commit *commit)
 
 	walker_say(walker, "walk %s\n", oid_to_hex(&commit->object.oid));
 
-	if (process(walker, &get_commit_tree(commit)->object))
-		return -1;
-
-	for (parents = commit->parents; parents; parents = parents->next) {
-		if (process(walker, &parents->item->object))
+	if (walker->get_tree) {
+		if (process(walker, &commit->tree->object))
 			return -1;
+		if (!walker->get_all)
+			walker->get_tree = 0;
 	}
-
+	if (walker->get_history) {
+		struct commit_list *parents = commit->parents;
+		for (; parents; parents = parents->next) {
+			if (process(walker, &parents->item->object))
+				return -1;
+		}
+	}
 	return 0;
 }
 
@@ -136,7 +134,7 @@ static int process_object(struct walker *walker, struct object *obj)
 	}
 	return error("Unable to determine requirements "
 		     "of type %s for %s",
-		     type_name(obj->type), oid_to_hex(&obj->oid));
+		     typename(obj->type), oid_to_hex(&obj->oid));
 }
 
 static int process(struct walker *walker, struct object *obj)
@@ -163,11 +161,6 @@ static int process(struct walker *walker, struct object *obj)
 static int loop(struct walker *walker)
 {
 	struct object_list *elem;
-	struct progress *progress = NULL;
-	uint64_t nr = 0;
-
-	if (walker->get_progress)
-		progress = start_delayed_progress(_("Fetching objects"), 0);
 
 	while (process_queue) {
 		struct object *obj = process_queue->item;
@@ -182,20 +175,15 @@ static int loop(struct walker *walker)
 		 */
 		if (! (obj->flags & TO_SCAN)) {
 			if (walker->fetch(walker, obj->oid.hash)) {
-				stop_progress(&progress);
 				report_missing(obj);
 				return -1;
 			}
 		}
 		if (!obj->type)
-			parse_object(the_repository, &obj->oid);
-		if (process_object(walker, obj)) {
-			stop_progress(&progress);
+			parse_object(&obj->oid);
+		if (process_object(walker, obj))
 			return -1;
-		}
-		display_progress(progress, ++nr);
 	}
-	stop_progress(&progress);
 	return 0;
 }
 
@@ -218,8 +206,7 @@ static int interpret_target(struct walker *walker, char *target, struct object_i
 static int mark_complete(const char *path, const struct object_id *oid,
 			 int flag, void *cb_data)
 {
-	struct commit *commit = lookup_commit_reference_gently(the_repository,
-							       oid, 1);
+	struct commit *commit = lookup_commit_reference_gently(oid, 1);
 
 	if (commit) {
 		commit->object.flags |= COMPLETE;
@@ -272,13 +259,11 @@ int walker_fetch(struct walker *walker, int targets, char **target,
 	struct strbuf refname = STRBUF_INIT;
 	struct strbuf err = STRBUF_INIT;
 	struct ref_transaction *transaction = NULL;
-	struct object_id *oids;
+	struct object_id *oids = xmalloc(targets * sizeof(struct object_id));
 	char *msg = NULL;
 	int i, ret = -1;
 
 	save_commit_buffer = 0;
-
-	ALLOC_ARRAY(oids, targets);
 
 	if (write_ref) {
 		transaction = ref_transaction_begin(&err);
@@ -298,7 +283,7 @@ int walker_fetch(struct walker *walker, int targets, char **target,
 			error("Could not interpret response from server '%s' as something to pull", target[i]);
 			goto done;
 		}
-		if (process(walker, lookup_unknown_object(&oids[i])))
+		if (process(walker, lookup_unknown_object(oids[i].hash)))
 			goto done;
 	}
 

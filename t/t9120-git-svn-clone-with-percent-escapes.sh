@@ -74,4 +74,6 @@ test_expect_success 'test clone -s with unescaped space' '
 	)
 '
 
+stop_httpd
+
 test_done

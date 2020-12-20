@@ -2,9 +2,10 @@
 
 typedef struct dirent_DIR {
 	struct DIR base_dir;  /* extend base struct DIR */
+	struct dirent dd_dir; /* includes d_type */
 	HANDLE dd_handle;     /* FindFirstFile handle */
 	int dd_stat;          /* 0-based index */
-	struct dirent dd_dir; /* includes d_type */
+	char dd_name[MAX_PATH * 3]; /* file name (* 3 for UTF-8 conversion) */
 } dirent_DIR;
 
 DIR *(*opendir)(const char *dirname) = dirent_opendir;
@@ -94,9 +95,10 @@ DIR *dirent_opendir(const char *name)
 	}
 
 	/* initialize DIR structure and copy first dir entry */
-	dir = xmalloc(sizeof(dirent_DIR) + MAX_LONG_PATH);
+	dir = xmalloc(sizeof(dirent_DIR));
 	dir->base_dir.preaddir = (struct dirent *(*)(DIR *dir)) dirent_readdir;
 	dir->base_dir.pclosedir = (int (*)(DIR *dir)) dirent_closedir;
+	dir->dd_dir.d_name = dir->dd_name;
 	dir->dd_handle = h;
 	dir->dd_stat = 0;
 	finddata2dirent(&dir->dd_dir, &fdata);

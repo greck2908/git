@@ -1,13 +1,12 @@
-#include "test-tool.h"
 #include "cache.h"
 #include "lockfile.h"
 #include "tree.h"
 #include "cache-tree.h"
 
-int cmd__scrap_cache_tree(int ac, const char **av)
-{
-	struct lock_file index_lock = LOCK_INIT;
+static struct lock_file index_lock;
 
+int cmd_main(int ac, const char **av)
+{
 	setup_git_directory();
 	hold_locked_index(&index_lock, LOCK_DIE_ON_ERROR);
 	if (read_cache() < 0)

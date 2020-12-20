@@ -1,60 +1,29 @@
 @@
-expression dst, src, n, E;
-@@
-  memcpy(dst, src, n * sizeof(
-- E[...]
-+ *(E)
-  ))
-
-@@
 type T;
-T *ptr;
-T[] arr;
-expression E, n;
-@@
-(
-  memcpy(ptr, E,
-- n * sizeof(*(ptr))
-+ n * sizeof(T)
-  )
-|
-  memcpy(arr, E,
-- n * sizeof(*(arr))
-+ n * sizeof(T)
-  )
-|
-  memcpy(E, ptr,
-- n * sizeof(*(ptr))
-+ n * sizeof(T)
-  )
-|
-  memcpy(E, arr,
-- n * sizeof(*(arr))
-+ n * sizeof(T)
-  )
-)
-
-@@
-type T;
-T *dst_ptr;
-T *src_ptr;
-T[] dst_arr;
-T[] src_arr;
+T *dst;
+T *src;
 expression n;
 @@
-(
-- memcpy(dst_ptr, src_ptr, (n) * sizeof(T))
-+ COPY_ARRAY(dst_ptr, src_ptr, n)
-|
-- memcpy(dst_ptr, src_arr, (n) * sizeof(T))
-+ COPY_ARRAY(dst_ptr, src_arr, n)
-|
-- memcpy(dst_arr, src_ptr, (n) * sizeof(T))
-+ COPY_ARRAY(dst_arr, src_ptr, n)
-|
-- memcpy(dst_arr, src_arr, (n) * sizeof(T))
-+ COPY_ARRAY(dst_arr, src_arr, n)
-)
+- memcpy(dst, src, (n) * sizeof(*dst));
++ COPY_ARRAY(dst, src, n);
+
+@@
+type T;
+T *dst;
+T *src;
+expression n;
+@@
+- memcpy(dst, src, (n) * sizeof(*src));
++ COPY_ARRAY(dst, src, n);
+
+@@
+type T;
+T *dst;
+T *src;
+expression n;
+@@
+- memcpy(dst, src, (n) * sizeof(T));
++ COPY_ARRAY(dst, src, n);
 
 @@
 type T;

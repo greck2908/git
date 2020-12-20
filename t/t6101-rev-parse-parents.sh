@@ -34,7 +34,7 @@ test_expect_success 'setup' '
 '
 
 test_expect_success 'start is valid' '
-	git rev-parse start | grep "^$OID_REGEX$"
+	git rev-parse start | grep "^[0-9a-f]\{40\}$"
 '
 
 test_expect_success 'start^0' '
@@ -212,14 +212,6 @@ test_expect_success 'rev-list merge^-^ (garbage after ^-)' '
 
 test_expect_success 'rev-list merge^-1x (garbage after ^-1)' '
 	test_must_fail git rev-list merge^-1x
-'
-
-test_expect_success 'rev-parse $garbage^@ does not segfault' '
-	test_must_fail git rev-parse $EMPTY_TREE^@
-'
-
-test_expect_success 'rev-parse $garbage...$garbage does not segfault' '
-	test_must_fail git rev-parse $EMPTY_TREE...$EMPTY_BLOB
 '
 
 test_done

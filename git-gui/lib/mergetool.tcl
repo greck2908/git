@@ -59,7 +59,7 @@ proc merge_add_resolution {path} {
 	update_index \
 		[mc "Adding resolution for %s" [short_path $path]] \
 		[list $path] \
-		[concat $after {ui_ready;}]
+		[concat $after [list ui_ready]]
 }
 
 proc merge_force_stage {stage} {

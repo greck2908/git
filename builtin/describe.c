@@ -1,4 +1,3 @@
-#define USE_THE_INDEX_COMPATIBILITY_MACROS
 #include "cache.h"
 #include "config.h"
 #include "lockfile.h"
@@ -7,20 +6,17 @@
 #include "blob.h"
 #include "refs.h"
 #include "builtin.h"
-#include "exec-cmd.h"
+#include "exec_cmd.h"
 #include "parse-options.h"
 #include "revision.h"
 #include "diff.h"
 #include "hashmap.h"
-#include "strvec.h"
+#include "argv-array.h"
 #include "run-command.h"
-#include "object-store.h"
+#include "revision.h"
 #include "list-objects.h"
-#include "commit-slab.h"
 
 #define MAX_TAGS	(FLAG_BITS - 1)
-
-define_commit_slab(commit_names, struct commit_name *);
 
 static const char * const describe_usage[] = {
 	N_("git describe [<options>] [<commit-ish>...]"),
@@ -41,7 +37,6 @@ static struct string_list patterns = STRING_LIST_INIT_NODUP;
 static struct string_list exclude_patterns = STRING_LIST_INIT_NODUP;
 static int always;
 static const char *suffix, *dirty, *broken;
-static struct commit_names commit_names;
 
 /* diff-index command arguments to check if working tree is dirty. */
 static const char *diff_index_args[] = {
@@ -54,7 +49,6 @@ struct commit_name {
 	struct tag *tag;
 	unsigned prio:2; /* annotated tag = 2, tag = 1, head = 0 */
 	unsigned name_checked:1;
-	unsigned misnamed:1;
 	struct object_id oid;
 	char *path;
 };
@@ -63,23 +57,20 @@ static const char *prio_names[] = {
 	N_("head"), N_("lightweight"), N_("annotated"),
 };
 
-static int commit_name_neq(const void *unused_cmp_data,
-			   const struct hashmap_entry *eptr,
-			   const struct hashmap_entry *entry_or_key,
+static int commit_name_cmp(const void *unused_cmp_data,
+			   const void *entry,
+			   const void *entry_or_key,
 			   const void *peeled)
 {
-	const struct commit_name *cn1, *cn2;
+	const struct commit_name *cn1 = entry;
+	const struct commit_name *cn2 = entry_or_key;
 
-	cn1 = container_of(eptr, const struct commit_name, entry);
-	cn2 = container_of(entry_or_key, const struct commit_name, entry);
-
-	return !oideq(&cn1->peeled, peeled ? peeled : &cn2->peeled);
+	return oidcmp(&cn1->peeled, peeled ? peeled : &cn2->peeled);
 }
 
 static inline struct commit_name *find_commit_name(const struct object_id *peeled)
 {
-	return hashmap_get_entry_from_hash(&names, oidhash(peeled), peeled,
-						struct commit_name, entry);
+	return hashmap_get_from_hash(&names, sha1hash(peeled->hash), peeled->hash);
 }
 
 static int replace_name(struct commit_name *e,
@@ -97,13 +88,13 @@ static int replace_name(struct commit_name *e,
 		struct tag *t;
 
 		if (!e->tag) {
-			t = lookup_tag(the_repository, &e->oid);
+			t = lookup_tag(&e->oid);
 			if (!t || parse_tag(t))
 				return 1;
 			e->tag = t;
 		}
 
-		t = lookup_tag(the_repository, oid);
+		t = lookup_tag(oid);
 		if (!t || parse_tag(t))
 			return 0;
 		*tag = t;
@@ -126,14 +117,13 @@ static void add_to_known_names(const char *path,
 		if (!e) {
 			e = xmalloc(sizeof(struct commit_name));
 			oidcpy(&e->peeled, peeled);
-			hashmap_entry_init(&e->entry, oidhash(peeled));
-			hashmap_add(&names, &e->entry);
+			hashmap_entry_init(e, sha1hash(peeled->hash));
+			hashmap_add(&names, e);
 			e->path = NULL;
 		}
 		e->tag = tag;
 		e->prio = prio;
 		e->name_checked = 0;
-		e->misnamed = 0;
 		oidcpy(&e->oid, oid);
 		free(e->path);
 		e->path = xstrdup(path);
@@ -195,7 +185,7 @@ static int get_name(const char *path, const struct object_id *oid, int flag, voi
 
 	/* Is it annotated? */
 	if (!peel_ref(path, &peeled)) {
-		is_annotated = !oideq(oid, &peeled);
+		is_annotated = !!oidcmp(oid, &peeled);
 	} else {
 		oidcpy(&peeled, oid);
 		is_annotated = 0;
@@ -272,31 +262,27 @@ static unsigned long finish_depth_computation(
 static void append_name(struct commit_name *n, struct strbuf *dst)
 {
 	if (n->prio == 2 && !n->tag) {
-		n->tag = lookup_tag(the_repository, &n->oid);
+		n->tag = lookup_tag(&n->oid);
 		if (!n->tag || parse_tag(n->tag))
 			die(_("annotated tag %s not available"), n->path);
 	}
 	if (n->tag && !n->name_checked) {
-		if (strcmp(n->tag->tag, all ? n->path + 5 : n->path)) {
-			warning(_("tag '%s' is externally known as '%s'"),
-				n->path, n->tag->tag);
-			n->misnamed = 1;
-		}
+		if (!n->tag->tag)
+			die(_("annotated tag %s has no embedded name"), n->path);
+		if (strcmp(n->tag->tag, all ? n->path + 5 : n->path))
+			warning(_("tag '%s' is really '%s' here"), n->tag->tag, n->path);
 		n->name_checked = 1;
 	}
 
-	if (n->tag) {
-		if (all)
-			strbuf_addstr(dst, "tags/");
+	if (n->tag)
 		strbuf_addstr(dst, n->tag->tag);
-	} else {
+	else
 		strbuf_addstr(dst, n->path);
-	}
 }
 
 static void append_suffix(int depth, const struct object_id *oid, struct strbuf *dst)
 {
-	strbuf_addf(dst, "-%d-g%s", depth, find_unique_abbrev(oid, abbrev));
+	strbuf_addf(dst, "-%d-g%s", depth, find_unique_abbrev(oid->hash, abbrev));
 }
 
 static void describe_commit(struct object_id *oid, struct strbuf *dst)
@@ -309,7 +295,7 @@ static void describe_commit(struct object_id *oid, struct strbuf *dst)
 	unsigned long seen_commits = 0;
 	unsigned int unannotated_cnt = 0;
 
-	cmit = lookup_commit_reference(the_repository, oid);
+	cmit = lookup_commit_reference(oid);
 
 	n = find_commit_name(&cmit->object.oid);
 	if (n && (tags || all || n->prio == 2)) {
@@ -317,8 +303,8 @@ static void describe_commit(struct object_id *oid, struct strbuf *dst)
 		 * Exact match to an existing ref.
 		 */
 		append_name(n, dst);
-		if (n->misnamed || longformat)
-			append_suffix(0, n->tag ? get_tagged_oid(n->tag) : oid, dst);
+		if (longformat)
+			append_suffix(0, n->tag ? &n->tag->tagged->oid : oid, dst);
 		if (suffix)
 			strbuf_addstr(dst, suffix);
 		return;
@@ -332,15 +318,11 @@ static void describe_commit(struct object_id *oid, struct strbuf *dst)
 	if (!have_util) {
 		struct hashmap_iter iter;
 		struct commit *c;
-		struct commit_name *n;
-
-		init_commit_names(&commit_names);
-		hashmap_for_each_entry(&names, &iter, n,
-					entry /* member name */) {
-			c = lookup_commit_reference_gently(the_repository,
-							   &n->peeled, 1);
+		struct commit_name *n = hashmap_iter_first(&names, &iter);
+		for (; n; n = hashmap_iter_next(&iter)) {
+			c = lookup_commit_reference_gently(&n->peeled, 1);
 			if (c)
-				*commit_names_at(&commit_names, c) = n;
+				c->util = n;
 		}
 		have_util = 1;
 	}
@@ -351,11 +333,8 @@ static void describe_commit(struct object_id *oid, struct strbuf *dst)
 	while (list) {
 		struct commit *c = pop_commit(&list);
 		struct commit_list *parents = c->parents;
-		struct commit_name **slot;
-
 		seen_commits++;
-		slot = commit_names_peek(&commit_names, c);
-		n = slot ? *slot : NULL;
+		n = c->util;
 		if (n) {
 			if (!tags && !all && n->prio < 2) {
 				unannotated_cnt++;
@@ -379,25 +358,11 @@ static void describe_commit(struct object_id *oid, struct strbuf *dst)
 			if (!(c->object.flags & t->flag_within))
 				t->depth++;
 		}
-		/* Stop if last remaining path already covered by best candidate(s) */
 		if (annotated_cnt && !list) {
-			int best_depth = INT_MAX;
-			unsigned best_within = 0;
-			for (cur_match = 0; cur_match < match_cnt; cur_match++) {
-				struct possible_tag *t = &all_matches[cur_match];
-				if (t->depth < best_depth) {
-					best_depth = t->depth;
-					best_within = t->flag_within;
-				} else if (t->depth == best_depth) {
-					best_within |= t->flag_within;
-				}
-			}
-			if ((c->object.flags & best_within) == best_within) {
-				if (debug)
-					fprintf(stderr, _("finished search at %s\n"),
-						oid_to_hex(&c->object.oid));
-				break;
-			}
+			if (debug)
+				fprintf(stderr, _("finished search at %s\n"),
+					oid_to_hex(&c->object.oid));
+			break;
 		}
 		while (parents) {
 			struct commit *p = parents->item;
@@ -415,7 +380,7 @@ static void describe_commit(struct object_id *oid, struct strbuf *dst)
 	if (!match_cnt) {
 		struct object_id *cmit_oid = &cmit->object.oid;
 		if (always) {
-			strbuf_add_unique_abbrev(dst, cmit_oid, abbrev);
+			strbuf_addstr(dst, find_unique_abbrev(cmit_oid->hash, abbrev));
 			if (suffix)
 				strbuf_addstr(dst, suffix);
 			return;
@@ -466,7 +431,7 @@ static void describe_commit(struct object_id *oid, struct strbuf *dst)
 	}
 
 	append_name(all_matches[0].name, dst);
-	if (all_matches[0].name->misnamed || abbrev)
+	if (abbrev)
 		append_suffix(all_matches[0].depth, &cmit->object.oid, dst);
 	if (suffix)
 		strbuf_addstr(dst, suffix);
@@ -489,7 +454,7 @@ static void process_object(struct object *obj, const char *path, void *data)
 {
 	struct process_commit_data *pcd = data;
 
-	if (oideq(&pcd->looking_for, &obj->oid) && !pcd->dst->len) {
+	if (!oidcmp(&pcd->looking_for, &obj->oid) && !pcd->dst->len) {
 		reset_revision_walk();
 		describe_commit(&pcd->current_commit, pcd->dst);
 		strbuf_addf(pcd->dst, ":%s", path);
@@ -501,15 +466,15 @@ static void process_object(struct object *obj, const char *path, void *data)
 static void describe_blob(struct object_id oid, struct strbuf *dst)
 {
 	struct rev_info revs;
-	struct strvec args = STRVEC_INIT;
+	struct argv_array args = ARGV_ARRAY_INIT;
 	struct process_commit_data pcd = { null_oid, oid, dst, &revs};
 
-	strvec_pushl(&args, "internal: The first arg is not parsed",
-		     "--objects", "--in-commit-order", "--reverse", "HEAD",
-		     NULL);
+	argv_array_pushl(&args, "internal: The first arg is not parsed",
+		"--objects", "--in-commit-order", "--reverse", "HEAD",
+		NULL);
 
-	repo_init_revisions(the_repository, &revs, NULL);
-	if (setup_revisions(args.nr, args.v, &revs, NULL) > 1)
+	init_revisions(&revs, NULL);
+	if (setup_revisions(args.argc, args.argv, &revs, NULL) > 1)
 		BUG("setup_revisions could not handle all args?");
 
 	if (prepare_revision_walk(&revs))
@@ -530,11 +495,11 @@ static void describe(const char *arg, int last_one)
 
 	if (get_oid(arg, &oid))
 		die(_("Not a valid object name %s"), arg);
-	cmit = lookup_commit_reference_gently(the_repository, &oid, 1);
+	cmit = lookup_commit_reference_gently(&oid, 1);
 
 	if (cmit)
 		describe_commit(&oid, &sb);
-	else if (oid_object_info(the_repository, &oid, NULL) == OBJ_BLOB)
+	else if (lookup_blob(&oid))
 		describe_blob(oid, &sb);
 	else
 		die(_("%s is neither a commit nor blob"), arg);
@@ -594,29 +559,29 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 
 	if (contains) {
 		struct string_list_item *item;
-		struct strvec args;
+		struct argv_array args;
 
-		strvec_init(&args);
-		strvec_pushl(&args, "name-rev",
-			     "--peel-tag", "--name-only", "--no-undefined",
-			     NULL);
+		argv_array_init(&args);
+		argv_array_pushl(&args, "name-rev",
+				 "--peel-tag", "--name-only", "--no-undefined",
+				 NULL);
 		if (always)
-			strvec_push(&args, "--always");
+			argv_array_push(&args, "--always");
 		if (!all) {
-			strvec_push(&args, "--tags");
+			argv_array_push(&args, "--tags");
 			for_each_string_list_item(item, &patterns)
-				strvec_pushf(&args, "--refs=refs/tags/%s", item->string);
+				argv_array_pushf(&args, "--refs=refs/tags/%s", item->string);
 			for_each_string_list_item(item, &exclude_patterns)
-				strvec_pushf(&args, "--exclude=refs/tags/%s", item->string);
+				argv_array_pushf(&args, "--exclude=refs/tags/%s", item->string);
 		}
 		if (argc)
-			strvec_pushv(&args, argv);
+			argv_array_pushv(&args, argv);
 		else
-			strvec_push(&args, "HEAD");
-		return cmd_name_rev(args.nr, args.v, prefix);
+			argv_array_push(&args, "HEAD");
+		return cmd_name_rev(args.argc, args.argv, prefix);
 	}
 
-	hashmap_init(&names, commit_name_neq, NULL, 0);
+	hashmap_init(&names, commit_name_cmp, NULL, 0);
 	for_each_rawref(get_name, NULL);
 	if (!hashmap_get_size(&names) && !always)
 		die(_("No names found, cannot describe anything."));
@@ -624,7 +589,7 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 	if (argc == 0) {
 		if (broken) {
 			struct child_process cp = CHILD_PROCESS_INIT;
-			strvec_pushv(&cp.args, diff_index_args);
+			argv_array_pushv(&cp.args, diff_index_args);
 			cp.git_cmd = 1;
 			cp.no_stdin = 1;
 			cp.no_stdout = 1;
@@ -644,22 +609,21 @@ int cmd_describe(int argc, const char **argv, const char *prefix)
 				suffix = broken;
 			}
 		} else if (dirty) {
-			struct lock_file index_lock = LOCK_INIT;
+			static struct lock_file index_lock;
 			struct rev_info revs;
-			struct strvec args = STRVEC_INIT;
+			struct argv_array args = ARGV_ARRAY_INIT;
 			int fd, result;
 
-			setup_work_tree();
-			read_cache();
+			read_cache_preload(NULL);
 			refresh_index(&the_index, REFRESH_QUIET|REFRESH_UNMERGED,
 				      NULL, NULL, NULL);
 			fd = hold_locked_index(&index_lock, 0);
 			if (0 <= fd)
-				repo_update_index_if_able(the_repository, &index_lock);
+				update_index_if_able(&the_index, &index_lock);
 
-			repo_init_revisions(the_repository, &revs, prefix);
-			strvec_pushv(&args, diff_index_args);
-			if (setup_revisions(args.nr, args.v, &revs, NULL) != 1)
+			init_revisions(&revs, prefix);
+			argv_array_pushv(&args, diff_index_args);
+			if (setup_revisions(args.argc, args.argv, &revs, NULL) != 1)
 				BUG("malformed internal diff-index command line");
 			result = run_diff_index(&revs, 0);
 

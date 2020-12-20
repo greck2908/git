@@ -71,7 +71,7 @@ then
 	then
 		merge_tool="$GIT_DIFF_TOOL"
 	else
-		merge_tool="$(get_merge_tool)"
+		merge_tool="$(get_merge_tool)" || exit
 	fi
 fi
 

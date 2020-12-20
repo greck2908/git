@@ -1,7 +1,6 @@
 #ifndef OIDMAP_H
 #define OIDMAP_H
 
-#include "cache.h"
 #include "hashmap.h"
 
 /*
@@ -33,7 +32,7 @@ struct oidmap {
  * parameter may be used to preallocate a sufficiently large table and thus
  * prevent expensive resizing. If 0, the table is dynamically resized.
  */
-void oidmap_init(struct oidmap *map, size_t initial_size);
+extern void oidmap_init(struct oidmap *map, size_t initial_size);
 
 /*
  * Frees an oidmap structure and allocated memory.
@@ -41,13 +40,13 @@ void oidmap_init(struct oidmap *map, size_t initial_size);
  * If `free_entries` is true, each oidmap_entry in the map is freed as well
  * using stdlibs free().
  */
-void oidmap_free(struct oidmap *map, int free_entries);
+extern void oidmap_free(struct oidmap *map, int free_entries);
 
 /*
  * Returns the oidmap entry for the specified oid, or NULL if not found.
  */
-void *oidmap_get(const struct oidmap *map,
-		 const struct object_id *key);
+extern void *oidmap_get(const struct oidmap *map,
+			const struct object_id *key);
 
 /*
  * Adds or replaces an oidmap entry.
@@ -57,14 +56,14 @@ void *oidmap_get(const struct oidmap *map,
  *
  * Returns the replaced entry, or NULL if not found (i.e. the entry was added).
  */
-void *oidmap_put(struct oidmap *map, void *entry);
+extern void *oidmap_put(struct oidmap *map, void *entry);
 
 /*
  * Removes an oidmap entry matching the specified oid.
  *
  * Returns the removed entry, or NULL if not found.
  */
-void *oidmap_remove(struct oidmap *map, const struct object_id *key);
+extern void *oidmap_remove(struct oidmap *map, const struct object_id *key);
 
 
 struct oidmap_iter {
@@ -78,16 +77,14 @@ static inline void oidmap_iter_init(struct oidmap *map, struct oidmap_iter *iter
 
 static inline void *oidmap_iter_next(struct oidmap_iter *iter)
 {
-	/* TODO: this API could be reworked to do compile-time type checks */
-	return (void *)hashmap_iter_next(&iter->h_iter);
+	return hashmap_iter_next(&iter->h_iter);
 }
 
 static inline void *oidmap_iter_first(struct oidmap *map,
 				      struct oidmap_iter *iter)
 {
 	oidmap_iter_init(map, iter);
-	/* TODO: this API could be reworked to do compile-time type checks */
-	return (void *)oidmap_iter_next(iter);
+	return oidmap_iter_next(iter);
 }
 
 #endif

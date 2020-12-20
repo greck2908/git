@@ -1,10 +1,9 @@
+#define NO_THE_INDEX_COMPATIBILITY_MACROS
 #include "cache.h"
 #include "config.h"
 #include "dir.h"
 #include "pathspec.h"
 #include "attr.h"
-#include "strvec.h"
-#include "quote.h"
 
 /*
  * Finds which of the given pathspecs match items in the index.
@@ -38,7 +37,7 @@ void add_pathspec_matches_against_index(const struct pathspec *pathspec,
 		return;
 	for (i = 0; i < istate->cache_nr; i++) {
 		const struct cache_entry *ce = istate->cache[i];
-		ce_path_match(istate, ce, pathspec, seen);
+		ce_path_match(ce, pathspec, seen);
 	}
 }
 
@@ -199,7 +198,7 @@ static void parse_pathspec_attr_match(struct pathspec_item *item, const char *va
 	}
 
 	if (item->attr_check->nr != item->attr_match_nr)
-		BUG("should have same number of entries");
+		die("BUG: should have same number of entries");
 
 	string_list_clear(&list, 0);
 }
@@ -423,7 +422,7 @@ static void init_pathspec_item(struct pathspec_item *item, unsigned flags,
 
 	if (pathspec_prefix >= 0 &&
 	    (prefixlen || (prefix && *prefix)))
-		BUG("'prefix' magic is supposed to be used at worktree's root");
+		die("BUG: 'prefix' magic is supposed to be used at worktree's root");
 
 	if ((magic & PATHSPEC_LITERAL) && (magic & PATHSPEC_GLOB))
 		die(_("%s: 'literal' and 'glob' are incompatible"), elt);
@@ -438,13 +437,8 @@ static void init_pathspec_item(struct pathspec_item *item, unsigned flags,
 	} else {
 		match = prefix_path_gently(prefix, prefixlen,
 					   &prefixlen, copyfrom);
-		if (!match) {
-			const char *hint_path = get_git_work_tree();
-			if (!hint_path)
-				hint_path = get_git_dir();
-			die(_("%s: '%s' is outside repository at '%s'"), elt,
-			    copyfrom, absolute_path(hint_path));
-		}
+		if (!match)
+			die(_("%s: '%s' is outside repository"), elt, copyfrom);
 	}
 
 	item->match = match;
@@ -492,7 +486,7 @@ static void init_pathspec_item(struct pathspec_item *item, unsigned flags,
 	/* sanity checks, pathspec matchers assume these are sane */
 	if (item->nowildcard_len > item->len ||
 	    item->prefix         > item->len) {
-		BUG("error initializing pathspec_item");
+		die ("BUG: error initializing pathspec_item");
 	}
 }
 
@@ -551,7 +545,7 @@ void parse_pathspec(struct pathspec *pathspec,
 
 	if ((flags & PATHSPEC_PREFER_CWD) &&
 	    (flags & PATHSPEC_PREFER_FULL))
-		BUG("PATHSPEC_PREFER_CWD and PATHSPEC_PREFER_FULL are incompatible");
+		die("BUG: PATHSPEC_PREFER_CWD and PATHSPEC_PREFER_FULL are incompatible");
 
 	/* No arguments with prefix -> prefix pathspec */
 	if (!entry) {
@@ -559,7 +553,7 @@ void parse_pathspec(struct pathspec *pathspec,
 			return;
 
 		if (!(flags & PATHSPEC_PREFER_CWD))
-			BUG("PATHSPEC_PREFER_CWD requires arguments");
+			die("BUG: PATHSPEC_PREFER_CWD requires arguments");
 
 		pathspec->items = item = xcalloc(1, sizeof(*item));
 		item->match = xstrdup(prefix);
@@ -615,45 +609,9 @@ void parse_pathspec(struct pathspec *pathspec,
 
 	if (pathspec->magic & PATHSPEC_MAXDEPTH) {
 		if (flags & PATHSPEC_KEEP_ORDER)
-			BUG("PATHSPEC_MAXDEPTH_VALID and PATHSPEC_KEEP_ORDER are incompatible");
+			die("BUG: PATHSPEC_MAXDEPTH_VALID and PATHSPEC_KEEP_ORDER are incompatible");
 		QSORT(pathspec->items, pathspec->nr, pathspec_item_cmp);
 	}
-}
-
-void parse_pathspec_file(struct pathspec *pathspec, unsigned magic_mask,
-			 unsigned flags, const char *prefix,
-			 const char *file, int nul_term_line)
-{
-	struct strvec parsed_file = STRVEC_INIT;
-	strbuf_getline_fn getline_fn = nul_term_line ? strbuf_getline_nul :
-						       strbuf_getline;
-	struct strbuf buf = STRBUF_INIT;
-	struct strbuf unquoted = STRBUF_INIT;
-	FILE *in;
-
-	if (!strcmp(file, "-"))
-		in = stdin;
-	else
-		in = xfopen(file, "r");
-
-	while (getline_fn(&buf, in) != EOF) {
-		if (!nul_term_line && buf.buf[0] == '"') {
-			strbuf_reset(&unquoted);
-			if (unquote_c_style(&unquoted, buf.buf, NULL))
-				die(_("line is badly quoted: %s"), buf.buf);
-			strbuf_swap(&buf, &unquoted);
-		}
-		strvec_push(&parsed_file, buf.buf);
-		strbuf_reset(&buf);
-	}
-
-	strbuf_release(&unquoted);
-	strbuf_release(&buf);
-	if (in != stdin)
-		fclose(in);
-
-	parse_pathspec(pathspec, magic_mask, flags, prefix, parsed_file.v);
-	strvec_clear(&parsed_file);
 }
 
 void copy_pathspec(struct pathspec *dst, const struct pathspec *src)
@@ -700,42 +658,4 @@ void clear_pathspec(struct pathspec *pathspec)
 
 	FREE_AND_NULL(pathspec->items);
 	pathspec->nr = 0;
-}
-
-int match_pathspec_attrs(const struct index_state *istate,
-			 const char *name, int namelen,
-			 const struct pathspec_item *item)
-{
-	int i;
-	char *to_free = NULL;
-
-	if (name[namelen])
-		name = to_free = xmemdupz(name, namelen);
-
-	git_check_attr(istate, name, item->attr_check);
-
-	free(to_free);
-
-	for (i = 0; i < item->attr_match_nr; i++) {
-		const char *value;
-		int matched;
-		enum attr_match_mode match_mode;
-
-		value = item->attr_check->items[i].value;
-		match_mode = item->attr_match[i].match_mode;
-
-		if (ATTR_TRUE(value))
-			matched = (match_mode == MATCH_SET);
-		else if (ATTR_FALSE(value))
-			matched = (match_mode == MATCH_UNSET);
-		else if (ATTR_UNSET(value))
-			matched = (match_mode == MATCH_UNSPECIFIED);
-		else
-			matched = (match_mode == MATCH_VALUE &&
-				   !strcmp(item->attr_match[i].value, value));
-		if (!matched)
-			return 0;
-	}
-
-	return 1;
 }

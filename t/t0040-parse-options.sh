@@ -8,7 +8,7 @@ test_description='our own option parser'
 . ./test-lib.sh
 
 cat >expect <<\EOF
-usage: test-tool parse-options <options>
+usage: test-parse-options <options>
 
     A helper function for the parse-options API.
 
@@ -23,8 +23,7 @@ usage: test-tool parse-options <options>
     -j <n>                get a integer, too
     -m, --magnitude <n>   get a magnitude
     --set23               set integer to 23
-    --mode1               set integer to 1 (cmdmode option)
-    --mode2               set integer to 2 (cmdmode option)
+    -t <time>             get timestamp of <time>
     -L, --length <str>    get length of <str>
     -F, --file <file>     set file to <file>
 
@@ -44,22 +43,16 @@ Magic arguments
     --no-ambiguous        negative ambiguity
 
 Standard options
-    --abbrev[=<n>]        use <n> digits to display object names
+    --abbrev[=<n>]        use <n> digits to display SHA-1s
     -v, --verbose         be verbose
     -n, --dry-run         dry run
     -q, --quiet           be quiet
     --expect <string>     expected output in the variable dump
 
-Alias
-    -A, --alias-source <string>
-                          get a string
-    -Z, --alias-target <string>
-                          alias of --alias-source
-
 EOF
 
 test_expect_success 'test help' '
-	test_must_fail test-tool parse-options -h >output 2>output.err &&
+	test_must_fail test-parse-options -h >output 2>output.err &&
 	test_must_be_empty output.err &&
 	test_i18ncmp expect output
 '
@@ -71,7 +64,7 @@ check () {
 	shift &&
 	expect="$1" &&
 	shift &&
-	test-tool parse-options --expect="$what $expect" "$@"
+	test-parse-options --expect="$what $expect" "$@"
 }
 
 check_unknown_i18n() {
@@ -82,7 +75,7 @@ check_unknown_i18n() {
 		echo error: unknown switch \`${1#-}\' >expect ;;
 	esac &&
 	cat expect.err >>expect &&
-	test_must_fail test-tool parse-options $* >output 2>output.err &&
+	test_must_fail test-parse-options $* >output 2>output.err &&
 	test_must_be_empty output &&
 	test_i18ncmp expect output.err
 }
@@ -140,7 +133,7 @@ file: prefix/my.file
 EOF
 
 test_expect_success 'short options' '
-	test-tool parse-options -s123 -b -i 1729 -m 16k -b -vv -n -F my.file \
+	test-parse-options -s123 -b -i 1729 -m 16k -b -vv -n -F my.file \
 	>output 2>output.err &&
 	test_cmp expect output &&
 	test_must_be_empty output.err
@@ -160,7 +153,7 @@ file: prefix/fi.le
 EOF
 
 test_expect_success 'long options' '
-	test-tool parse-options --boolean --integer 1729 --magnitude 16k \
+	test-parse-options --boolean --integer 1729 --magnitude 16k \
 		--boolean --string2=321 --verbose --verbose --no-dry-run \
 		--abbrev=10 --file fi.le --obsolete \
 		>output 2>output.err &&
@@ -169,9 +162,9 @@ test_expect_success 'long options' '
 '
 
 test_expect_success 'missing required value' '
-	test_expect_code 129 test-tool parse-options -s &&
-	test_expect_code 129 test-tool parse-options --string &&
-	test_expect_code 129 test-tool parse-options --file
+	test_expect_code 129 test-parse-options -s &&
+	test_expect_code 129 test-parse-options --string &&
+	test_expect_code 129 test-parse-options --file
 '
 
 cat >expect <<\EOF
@@ -191,7 +184,7 @@ arg 02: --boolean
 EOF
 
 test_expect_success 'intermingled arguments' '
-	test-tool parse-options a1 --string 123 b1 --boolean -j 13 -- --boolean \
+	test-parse-options a1 --string 123 b1 --boolean -j 13 -- --boolean \
 		>output 2>output.err &&
 	test_must_be_empty output.err &&
 	test_cmp expect output
@@ -211,60 +204,66 @@ file: (not set)
 EOF
 
 test_expect_success 'unambiguously abbreviated option' '
-	GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS=false \
-	test-tool parse-options --int 2 --boolean --no-bo >output 2>output.err &&
+	test-parse-options --int 2 --boolean --no-bo >output 2>output.err &&
 	test_must_be_empty output.err &&
 	test_cmp expect output
 '
 
 test_expect_success 'unambiguously abbreviated option with "="' '
-	GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS=false \
-	test-tool parse-options --expect="integer: 2" --int=2
+	test-parse-options --expect="integer: 2" --int=2
 '
 
 test_expect_success 'ambiguously abbreviated option' '
-	test_expect_code 129 env GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS=false \
-	test-tool parse-options --strin 123
+	test_expect_code 129 test-parse-options --strin 123
 '
 
 test_expect_success 'non ambiguous option (after two options it abbreviates)' '
-	GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS=false \
-	test-tool parse-options --expect="string: 123" --st 123
-'
-
-test_expect_success 'Alias options do not contribute to abbreviation' '
-	test-tool parse-options --alias-source 123 >output &&
-	grep "^string: 123" output &&
-	test-tool parse-options --alias-target 123 >output &&
-	grep "^string: 123" output &&
-	test_must_fail test-tool parse-options --alias &&
-	GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS=false \
-	test-tool parse-options --alias 123 >output &&
-	grep "^string: 123" output
+	test-parse-options --expect="string: 123" --st 123
 '
 
 cat >typo.err <<\EOF
-error: did you mean `--boolean` (with two dashes)?
+error: did you mean `--boolean` (with two dashes ?)
 EOF
 
 test_expect_success 'detect possible typos' '
-	test_must_fail test-tool parse-options -boolean >output 2>output.err &&
+	test_must_fail test-parse-options -boolean >output 2>output.err &&
 	test_must_be_empty output &&
-	test_i18ncmp typo.err output.err
+	test_cmp typo.err output.err
 '
 
 cat >typo.err <<\EOF
-error: did you mean `--ambiguous` (with two dashes)?
+error: did you mean `--ambiguous` (with two dashes ?)
 EOF
 
 test_expect_success 'detect possible typos' '
-	test_must_fail test-tool parse-options -ambiguous >output 2>output.err &&
+	test_must_fail test-parse-options -ambiguous >output 2>output.err &&
 	test_must_be_empty output &&
-	test_i18ncmp typo.err output.err
+	test_cmp typo.err output.err
 '
 
 test_expect_success 'keep some options as arguments' '
-	test-tool parse-options --expect="arg 00: --quux" --quux
+	test-parse-options --expect="arg 00: --quux" --quux
+'
+
+cat >expect <<\EOF
+boolean: 0
+integer: 0
+magnitude: 0
+timestamp: 1
+string: (not set)
+abbrev: 7
+verbose: -1
+quiet: 1
+dry run: no
+file: (not set)
+arg 00: foo
+EOF
+
+test_expect_success 'OPT_DATE() works' '
+	test-parse-options -t "1970-01-01 00:00:01 +0000" \
+		foo -q >output 2>output.err &&
+	test_must_be_empty output.err &&
+	test_cmp expect output
 '
 
 cat >expect <<\EOF
@@ -282,15 +281,17 @@ file: (not set)
 EOF
 
 test_expect_success 'OPT_CALLBACK() and OPT_BIT() work' '
-	test-tool parse-options --length=four -b -4 >output 2>output.err &&
+	test-parse-options --length=four -b -4 >output 2>output.err &&
 	test_must_be_empty output.err &&
 	test_cmp expect output
 '
 
+>expect
+
 test_expect_success 'OPT_CALLBACK() and callback errors work' '
-	test_must_fail test-tool parse-options --no-length >output 2>output.err &&
-	test_must_be_empty output &&
-	test_must_be_empty output.err
+	test_must_fail test-parse-options --no-length >output 2>output.err &&
+	test_i18ncmp expect output &&
+	test_i18ncmp expect.err output.err
 '
 
 cat >expect <<\EOF
@@ -307,47 +308,31 @@ file: (not set)
 EOF
 
 test_expect_success 'OPT_BIT() and OPT_SET_INT() work' '
-	test-tool parse-options --set23 -bbbbb --no-or4 >output 2>output.err &&
+	test-parse-options --set23 -bbbbb --no-or4 >output 2>output.err &&
 	test_must_be_empty output.err &&
 	test_cmp expect output
 '
 
 test_expect_success 'OPT_NEGBIT() and OPT_SET_INT() work' '
-	test-tool parse-options --set23 -bbbbb --neg-or4 >output 2>output.err &&
+	test-parse-options --set23 -bbbbb --neg-or4 >output 2>output.err &&
 	test_must_be_empty output.err &&
 	test_cmp expect output
 '
 
 test_expect_success 'OPT_BIT() works' '
-	test-tool parse-options --expect="boolean: 6" -bb --or4
+	test-parse-options --expect="boolean: 6" -bb --or4
 '
 
 test_expect_success 'OPT_NEGBIT() works' '
-	test-tool parse-options --expect="boolean: 6" -bb --no-neg-or4
-'
-
-test_expect_success 'OPT_CMDMODE() works' '
-	test-tool parse-options --expect="integer: 1" --mode1
-'
-
-test_expect_success 'OPT_CMDMODE() detects incompatibility' '
-	test_must_fail test-tool parse-options --mode1 --mode2 >output 2>output.err &&
-	test_must_be_empty output &&
-	test_i18ngrep "incompatible with --mode" output.err
-'
-
-test_expect_success 'OPT_CMDMODE() detects incompatibility with something else' '
-	test_must_fail test-tool parse-options --set23 --mode2 >output 2>output.err &&
-	test_must_be_empty output &&
-	test_i18ngrep "incompatible with something else" output.err
+	test-parse-options --expect="boolean: 6" -bb --no-neg-or4
 '
 
 test_expect_success 'OPT_COUNTUP() with PARSE_OPT_NODASH works' '
-	test-tool parse-options --expect="boolean: 6" + + + + + +
+	test-parse-options --expect="boolean: 6" + + + + + +
 '
 
 test_expect_success 'OPT_NUMBER_CALLBACK() works' '
-	test-tool parse-options --expect="integer: 12345" -12345
+	test-parse-options --expect="integer: 12345" -12345
 '
 
 cat >expect <<\EOF
@@ -364,8 +349,7 @@ file: (not set)
 EOF
 
 test_expect_success 'negation of OPT_NONEG flags is not ambiguous' '
-	GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS=false \
-	test-tool parse-options --no-ambig >output 2>output.err &&
+	test-parse-options --no-ambig >output 2>output.err &&
 	test_must_be_empty output.err &&
 	test_cmp expect output
 '
@@ -376,52 +360,38 @@ list: bar
 list: baz
 EOF
 test_expect_success '--list keeps list of strings' '
-	test-tool parse-options --list foo --list=bar --list=baz >output &&
+	test-parse-options --list foo --list=bar --list=baz >output &&
 	test_cmp expect output
 '
 
 test_expect_success '--no-list resets list' '
-	test-tool parse-options --list=other --list=irrelevant --list=options \
+	test-parse-options --list=other --list=irrelevant --list=options \
 		--no-list --list=foo --list=bar --list=baz >output &&
 	test_cmp expect output
 '
 
 test_expect_success 'multiple quiet levels' '
-	test-tool parse-options --expect="quiet: 3" -q -q -q
+	test-parse-options --expect="quiet: 3" -q -q -q
 '
 
 test_expect_success 'multiple verbose levels' '
-	test-tool parse-options --expect="verbose: 3" -v -v -v
+	test-parse-options --expect="verbose: 3" -v -v -v
 '
 
 test_expect_success '--no-quiet sets --quiet to 0' '
-	test-tool parse-options --expect="quiet: 0" --no-quiet
+	test-parse-options --expect="quiet: 0" --no-quiet
 '
 
 test_expect_success '--no-quiet resets multiple -q to 0' '
-	test-tool parse-options --expect="quiet: 0" -q -q -q --no-quiet
+	test-parse-options --expect="quiet: 0" -q -q -q --no-quiet
 '
 
 test_expect_success '--no-verbose sets verbose to 0' '
-	test-tool parse-options --expect="verbose: 0" --no-verbose
+	test-parse-options --expect="verbose: 0" --no-verbose
 '
 
 test_expect_success '--no-verbose resets multiple verbose to 0' '
-	test-tool parse-options --expect="verbose: 0" -v -v -v --no-verbose
-'
-
-test_expect_success 'GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS works' '
-	GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS=false \
-		test-tool parse-options --ye &&
-	test_must_fail env GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS=true \
-		test-tool parse-options --ye
-'
-
-test_expect_success '--end-of-options treats remainder as args' '
-	test-tool parse-options \
-	    --expect="verbose: -1" \
-	    --expect="arg 00: --verbose" \
-	    --end-of-options --verbose
+	test-parse-options --expect="verbose: 0" -v -v -v --no-verbose
 '
 
 test_done

@@ -2,34 +2,18 @@
  * Copyright (c) 2010 Ævar Arnfjörð Bjarmason
  */
 
-#include "cache.h"
-#include "exec-cmd.h"
+#include "git-compat-util.h"
 #include "gettext.h"
 #include "strbuf.h"
 #include "utf8.h"
-#include "config.h"
+#include "cache.h"
+#include "exec_cmd.h"
 
 #ifndef NO_GETTEXT
 #	include <locale.h>
 #	include <libintl.h>
 #	ifdef GIT_WINDOWS_NATIVE
-
-static const char *locale_charset(void)
-{
-	const char *env = getenv("LC_ALL"), *dot;
-
-	if (!env || !*env)
-		env = getenv("LC_CTYPE");
-	if (!env || !*env)
-		env = getenv("LANG");
-
-	if (!env)
-		return "UTF-8";
-
-	dot = strchr(env, '.');
-	return !dot ? env : dot + 1;
-}
-
+#		define locale_charset() "UTF-8"
 #	elif defined HAVE_LIBCHARSET_H
 #		include <libcharset.h>
 #	else
@@ -65,13 +49,15 @@ const char *get_preferred_languages(void)
 	return NULL;
 }
 
+#ifdef GETTEXT_POISON
 int use_gettext_poison(void)
 {
 	static int poison_requested = -1;
 	if (poison_requested == -1)
-		poison_requested = git_env_bool("GIT_TEST_GETTEXT_POISON", 0);
+		poison_requested = getenv("GIT_GETTEXT_POISON") ? 1 : 0;
 	return poison_requested;
 }
+#endif
 
 #ifndef NO_GETTEXT
 static int test_vsnprintf(const char *fmt, ...)
@@ -175,24 +161,21 @@ static void init_gettext_charset(const char *domain)
 
 void git_setup_gettext(void)
 {
-	const char *podir = getenv(GIT_TEXT_DOMAIN_DIR_ENVIRONMENT);
+	const char *podir = getenv("GIT_TEXTDOMAINDIR");
 	char *p = NULL;
 
 	if (!podir)
-		podir = p = system_path(GIT_LOCALE_PATH);
+		podir = GIT_LOCALE_PATH;
+	if (!is_absolute_path(podir))
+		podir = p = system_path(podir);
 
-	use_gettext_poison(); /* getenv() reentrancy paranoia */
-
-	if (!is_directory(podir)) {
-		free(p);
-		return;
+	if (is_directory(podir)) {
+		bindtextdomain("git", podir);
+		setlocale(LC_MESSAGES, "");
+		setlocale(LC_TIME, "");
+		init_gettext_charset("git");
+		textdomain("git");
 	}
-
-	bindtextdomain("git", podir);
-	setlocale(LC_MESSAGES, "");
-	setlocale(LC_TIME, "");
-	init_gettext_charset("git");
-	textdomain("git");
 
 	free(p);
 }

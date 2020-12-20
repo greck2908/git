@@ -70,8 +70,7 @@ static void resolve_symlink(struct strbuf *path)
 }
 
 /* Make sure errno contains a meaningful value on error */
-static int lock_file(struct lock_file *lk, const char *path, int flags,
-		     int mode)
+static int lock_file(struct lock_file *lk, const char *path, int flags)
 {
 	struct strbuf filename = STRBUF_INIT;
 
@@ -80,7 +79,7 @@ static int lock_file(struct lock_file *lk, const char *path, int flags,
 		resolve_symlink(&filename);
 
 	strbuf_addstr(&filename, LOCK_SUFFIX);
-	lk->tempfile = create_tempfile_mode(filename.buf, mode);
+	lk->tempfile = create_tempfile(filename.buf);
 	strbuf_release(&filename);
 	return lk->tempfile ? lk->tempfile->fd : -1;
 }
@@ -100,7 +99,7 @@ static int lock_file(struct lock_file *lk, const char *path, int flags,
  * exactly once. If timeout_ms is -1, try indefinitely.
  */
 static int lock_file_timeout(struct lock_file *lk, const char *path,
-			     int flags, long timeout_ms, int mode)
+			     int flags, long timeout_ms)
 {
 	int n = 1;
 	int multiplier = 1;
@@ -108,7 +107,7 @@ static int lock_file_timeout(struct lock_file *lk, const char *path,
 	static int random_initialized = 0;
 
 	if (timeout_ms == 0)
-		return lock_file(lk, path, flags, mode);
+		return lock_file(lk, path, flags);
 
 	if (!random_initialized) {
 		srand((unsigned int)getpid());
@@ -122,7 +121,7 @@ static int lock_file_timeout(struct lock_file *lk, const char *path,
 		long backoff_ms, wait_ms;
 		int fd;
 
-		fd = lock_file(lk, path, flags, mode);
+		fd = lock_file(lk, path, flags);
 
 		if (fd >= 0)
 			return fd; /* success */
@@ -170,11 +169,10 @@ NORETURN void unable_to_lock_die(const char *path, int err)
 }
 
 /* This should return a meaningful errno on failure */
-int hold_lock_file_for_update_timeout_mode(struct lock_file *lk,
-					   const char *path, int flags,
-					   long timeout_ms, int mode)
+int hold_lock_file_for_update_timeout(struct lock_file *lk, const char *path,
+				      int flags, long timeout_ms)
 {
-	int fd = lock_file_timeout(lk, path, flags, timeout_ms, mode);
+	int fd = lock_file_timeout(lk, path, flags, timeout_ms);
 	if (fd < 0) {
 		if (flags & LOCK_DIE_ON_ERROR)
 			unable_to_lock_die(path, errno);
@@ -195,7 +193,7 @@ char *get_locked_file_path(struct lock_file *lk)
 	strbuf_addstr(&ret, get_tempfile_path(lk->tempfile));
 	if (ret.len <= LOCK_SUFFIX_LEN ||
 	    strcmp(ret.buf + ret.len - LOCK_SUFFIX_LEN, LOCK_SUFFIX))
-		BUG("get_locked_file_path() called for malformed lock object");
+		die("BUG: get_locked_file_path() called for malformed lock object");
 	/* remove ".lock": */
 	strbuf_setlen(&ret, ret.len - LOCK_SUFFIX_LEN);
 	return strbuf_detach(&ret, NULL);

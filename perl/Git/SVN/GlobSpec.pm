@@ -1,6 +1,6 @@
 package Git::SVN::GlobSpec;
 use strict;
-use warnings $ENV{GIT_PERL_FATAL_WARNINGS} ? qw(FATAL all) : ();
+use warnings;
 
 sub new {
 	my ($class, $glob, $pattern_ok) = @_;

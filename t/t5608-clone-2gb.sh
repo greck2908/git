@@ -3,13 +3,14 @@
 test_description='Test cloning a repository larger than 2 gigabyte'
 . ./test-lib.sh
 
-if ! test_bool_env GIT_TEST_CLONE_2GB false
+if test -z "$GIT_TEST_CLONE_2GB"
 then
-	skip_all='expensive 2GB clone test; enable with GIT_TEST_CLONE_2GB=true'
-	test_done
+	say 'Skipping expensive 2GB clone test; enable it with GIT_TEST_CLONE_2GB=t'
+else
+	test_set_prereq CLONE_2GB
 fi
 
-test_expect_success 'setup' '
+test_expect_success CLONE_2GB 'setup' '
 
 	git config pack.compression 0 &&
 	git config pack.depth 0 &&
@@ -20,9 +21,9 @@ test_expect_success 'setup' '
 	 do
 		printf "Generating blob $i/$blobcount\r" >&2 &&
 		printf "blob\nmark :$i\ndata $blobsize\n" &&
-		#test-tool genrandom $i $blobsize &&
+		#test-genrandom $i $blobsize &&
 		printf "%-${blobsize}s" $i &&
-		echo "M 100644 :$i $i" >> commit &&
+		echo "M 100644 :$i $i" >> commit
 		i=$(($i+1)) ||
 		echo $? > exit-status
 	 done &&
@@ -37,13 +38,13 @@ test_expect_success 'setup' '
 
 '
 
-test_expect_success 'clone - bare' '
+test_expect_success CLONE_2GB 'clone - bare' '
 
 	git clone --bare --no-hardlinks . clone-bare
 
 '
 
-test_expect_success 'clone - with worktree, file:// protocol' '
+test_expect_success CLONE_2GB 'clone - with worktree, file:// protocol' '
 
 	git clone "file://$(pwd)" clone-wt
 

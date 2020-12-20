@@ -14,7 +14,7 @@ git subtree add   --prefix=<prefix> <repository> <ref>
 git subtree merge --prefix=<prefix> <commit>
 git subtree pull  --prefix=<prefix> <repository> <ref>
 git subtree push  --prefix=<prefix> <repository> <ref>
-git subtree split --prefix=<prefix> <commit>
+git subtree split --prefix=<prefix> <commit...>
 --
 h,help        show the help
 q             quiet
@@ -77,12 +77,6 @@ assert () {
 	fi
 }
 
-ensure_single_rev () {
-	if test $# -ne 1
-	then
-		die "You must provide exactly one revision.  Got: '$@'"
-	fi
-}
 
 while test $# -gt 0
 do
@@ -191,7 +185,6 @@ if test "$command" != "pull" &&
 then
 	revs=$(git rev-parse $default --revs-only "$@") || exit $?
 	dirs=$(git rev-parse --no-revs --no-flags "$@") || exit $?
-	ensure_single_rev $revs
 	if test -n "$dirs"
 	then
 		die "Error: Use --prefix instead of bare filenames."
@@ -238,14 +231,12 @@ cache_miss () {
 }
 
 check_parents () {
-	missed=$(cache_miss "$1")
-	local indent=$(($2 + 1))
+	missed=$(cache_miss "$@")
 	for miss in $missed
 	do
 		if ! test -r "$cachedir/notree/$miss"
 		then
 			debug "  incorrect order: $miss"
-			process_split_commit "$miss" "" "$indent"
 		fi
 	done
 }
@@ -306,7 +297,7 @@ find_latest_squash () {
 	main=
 	sub=
 	git log --grep="^git-subtree-dir: $dir/*\$" \
-		--no-show-signature --pretty=format:'START %H%n%s%n%n%b%nEND%n' HEAD |
+		--pretty=format:'START %H%n%s%n%n%b%nEND%n' HEAD |
 	while read a b junk
 	do
 		debug "$a $b $junk"
@@ -349,13 +340,8 @@ find_existing_splits () {
 	revs="$2"
 	main=
 	sub=
-	local grep_format="^git-subtree-dir: $dir/*\$"
-	if test -n "$ignore_joins"
-	then
-		grep_format="^Add '$dir/' from commit '"
-	fi
-	git log --grep="$grep_format" \
-		--no-show-signature --pretty=format:'START %H%n%s%n%n%b%nEND%n' $revs |
+	git log --grep="^git-subtree-dir: $dir/*\$" \
+		--pretty=format:'START %H%n%s%n%n%b%nEND%n' $revs |
 	while read a b junk
 	do
 		case "$a" in
@@ -396,7 +382,7 @@ copy_commit () {
 	# We're going to set some environment vars here, so
 	# do it in a subshell to get rid of them safely later
 	debug copy_commit "{$1}" "{$2}" "{$3}"
-	git log -1 --no-show-signature --pretty=format:'%an%n%ae%n%aD%n%cn%n%ce%n%cD%n%B' "$1" |
+	git log -1 --pretty=format:'%an%n%ae%n%aD%n%cn%n%ce%n%cD%n%B' "$1" |
 	(
 		read GIT_AUTHOR_NAME
 		read GIT_AUTHOR_EMAIL
@@ -476,8 +462,8 @@ squash_msg () {
 		oldsub_short=$(git rev-parse --short "$oldsub")
 		echo "Squashed '$dir/' changes from $oldsub_short..$newsub_short"
 		echo
-		git log --no-show-signature --pretty=tformat:'%h %s' "$oldsub..$newsub"
-		git log --no-show-signature --pretty=tformat:'REVERT: %h %s' "$newsub..$oldsub"
+		git log --pretty=tformat:'%h %s' "$oldsub..$newsub"
+		git log --pretty=tformat:'REVERT: %h %s' "$newsub..$oldsub"
 	else
 		echo "Squashed '$dir/' content from commit $newsub_short"
 	fi
@@ -489,7 +475,7 @@ squash_msg () {
 
 toptree_for_commit () {
 	commit="$1"
-	git rev-parse --verify "$commit^{tree}" || exit $?
+	git log -1 --pretty=format:'%T' "$commit" -- || exit $?
 }
 
 subtree_for_commit () {
@@ -548,7 +534,6 @@ copy_or_skip () {
 	nonidentical=
 	p=
 	gotparents=
-	copycommit=
 	for parent in $newparents
 	do
 		ptree=$(toptree_for_commit $parent) || exit $?
@@ -556,24 +541,7 @@ copy_or_skip () {
 		if test "$ptree" = "$tree"
 		then
 			# an identical parent could be used in place of this rev.
-			if test -n "$identical"
-			then
-				# if a previous identical parent was found, check whether
-				# one is already an ancestor of the other
-				mergebase=$(git merge-base $identical $parent)
-				if test "$identical" = "$mergebase"
-				then
-					# current identical commit is an ancestor of parent
-					identical="$parent"
-				elif test "$parent" != "$mergebase"
-				then
-					# no common history; commit must be copied
-					copycommit=1
-				fi
-			else
-				# first identical parent detected
-				identical="$parent"
-			fi
+			identical="$parent"
 		else
 			nonidentical="$parent"
 		fi
@@ -596,6 +564,7 @@ copy_or_skip () {
 		fi
 	done
 
+	copycommit=
 	if test -n "$identical" && test -n "$nonidentical"
 	then
 		extras=$(git rev-list --count $identical..$nonidentical)
@@ -627,58 +596,6 @@ ensure_clean () {
 ensure_valid_ref_format () {
 	git check-ref-format "refs/heads/$1" ||
 		die "'$1' does not look like a ref"
-}
-
-process_split_commit () {
-	local rev="$1"
-	local parents="$2"
-	local indent=$3
-
-	if test $indent -eq 0
-	then
-		revcount=$(($revcount + 1))
-	else
-		# processing commit without normal parent information;
-		# fetch from repo
-		parents=$(git rev-parse "$rev^@")
-		extracount=$(($extracount + 1))
-	fi
-
-	progress "$revcount/$revmax ($createcount) [$extracount]"
-
-	debug "Processing commit: $rev"
-	exists=$(cache_get "$rev")
-	if test -n "$exists"
-	then
-		debug "  prior: $exists"
-		return
-	fi
-	createcount=$(($createcount + 1))
-	debug "  parents: $parents"
-	check_parents "$parents" "$indent"
-	newparents=$(cache_get $parents)
-	debug "  newparents: $newparents"
-
-	tree=$(subtree_for_commit "$rev" "$dir")
-	debug "  tree is: $tree"
-
-	# ugly.  is there no better way to tell if this is a subtree
-	# vs. a mainline commit?  Does it matter?
-	if test -z "$tree"
-	then
-		set_notree "$rev"
-		if test -n "$newparents"
-		then
-			cache_set "$rev" "$rev"
-		fi
-		return
-	fi
-
-	newrev=$(copy_or_skip "$rev" "$tree" "$newparents") || exit $?
-	debug "  newrev is: $newrev"
-	cache_set "$rev" "$newrev"
-	cache_set latest_new "$newrev"
-	cache_set latest_old "$rev"
 }
 
 cmd_add () {
@@ -723,8 +640,9 @@ cmd_add_repository () {
 }
 
 cmd_add_commit () {
-	rev=$(git rev-parse $default --revs-only "$@") || exit $?
-	ensure_single_rev $rev
+	revs=$(git rev-parse $default --revs-only "$@") || exit $?
+	set -- $revs
+	rev="$1"
 
 	debug "Adding $dir as '$rev'..."
 	git read-tree --prefix="$dir" $rev || exit $?
@@ -771,7 +689,12 @@ cmd_split () {
 		done
 	fi
 
-	unrevs="$(find_existing_splits "$dir" "$revs")"
+	if test -n "$ignore_joins"
+	then
+		unrevs=
+	else
+		unrevs="$(find_existing_splits "$dir" "$revs")"
+	fi
 
 	# We can't restrict rev-list to only $dir here, because some of our
 	# parents have the $dir contents the root, and those won't match.
@@ -780,11 +703,45 @@ cmd_split () {
 	revmax=$(eval "$grl" | wc -l)
 	revcount=0
 	createcount=0
-	extracount=0
 	eval "$grl" |
 	while read rev parents
 	do
-		process_split_commit "$rev" "$parents" 0
+		revcount=$(($revcount + 1))
+		progress "$revcount/$revmax ($createcount)"
+		debug "Processing commit: $rev"
+		exists=$(cache_get "$rev")
+		if test -n "$exists"
+		then
+			debug "  prior: $exists"
+			continue
+		fi
+		createcount=$(($createcount + 1))
+		debug "  parents: $parents"
+		newparents=$(cache_get $parents)
+		debug "  newparents: $newparents"
+
+		tree=$(subtree_for_commit "$rev" "$dir")
+		debug "  tree is: $tree"
+
+		check_parents $parents
+
+		# ugly.  is there no better way to tell if this is a subtree
+		# vs. a mainline commit?  Does it matter?
+		if test -z "$tree"
+		then
+			set_notree "$rev"
+			if test -n "$newparents"
+			then
+				cache_set "$rev" "$rev"
+			fi
+			continue
+		fi
+
+		newrev=$(copy_or_skip "$rev" "$tree" "$newparents") || exit $?
+		debug "  newrev is: $newrev"
+		cache_set "$rev" "$newrev"
+		cache_set latest_new "$newrev"
+		cache_set latest_old "$rev"
 	done || exit $?
 
 	latest_new=$(cache_get latest_new)
@@ -823,9 +780,15 @@ cmd_split () {
 }
 
 cmd_merge () {
-	rev=$(git rev-parse $default --revs-only "$@") || exit $?
-	ensure_single_rev $rev
+	revs=$(git rev-parse $default --revs-only "$@") || exit $?
 	ensure_clean
+
+	set -- $revs
+	if test $# -ne 1
+	then
+		die "You must provide exactly one revision.  Got: '$revs'"
+	fi
+	rev="$1"
 
 	if test -n "$squash"
 	then

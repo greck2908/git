@@ -26,22 +26,26 @@ test_expect_success 'show-ref' '
 	git show-ref refs/tags/A >actual &&
 	test_cmp expect actual &&
 
+	>expect &&
+
 	test_must_fail git show-ref D >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 '
 
 test_expect_success 'show-ref -q' '
+	>expect &&
+
 	git show-ref -q A >actual &&
-	test_must_be_empty actual &&
+	test_cmp expect actual &&
 
 	git show-ref -q tags/A >actual &&
-	test_must_be_empty actual &&
+	test_cmp expect actual &&
 
 	git show-ref -q refs/tags/A >actual &&
-	test_must_be_empty actual &&
+	test_cmp expect actual &&
 
 	test_must_fail git show-ref -q D >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 '
 
 test_expect_success 'show-ref --verify' '
@@ -50,28 +54,32 @@ test_expect_success 'show-ref --verify' '
 	git show-ref --verify refs/tags/A >actual &&
 	test_cmp expect actual &&
 
+	>expect &&
+
 	test_must_fail git show-ref --verify A >actual &&
-	test_must_be_empty actual &&
+	test_cmp expect actual &&
 
 	test_must_fail git show-ref --verify tags/A >actual &&
-	test_must_be_empty actual &&
+	test_cmp expect actual &&
 
 	test_must_fail git show-ref --verify D >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 '
 
 test_expect_success 'show-ref --verify -q' '
+	>expect &&
+
 	git show-ref --verify -q refs/tags/A >actual &&
-	test_must_be_empty actual &&
+	test_cmp expect actual &&
 
 	test_must_fail git show-ref --verify -q A >actual &&
-	test_must_be_empty actual &&
+	test_cmp expect actual &&
 
 	test_must_fail git show-ref --verify -q tags/A >actual &&
-	test_must_be_empty actual &&
+	test_cmp expect actual &&
 
 	test_must_fail git show-ref --verify -q D >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 '
 
 test_expect_success 'show-ref -d' '
@@ -105,17 +113,19 @@ test_expect_success 'show-ref -d' '
 	git show-ref -d --verify refs/heads/master >actual &&
 	test_cmp expect actual &&
 
+	>expect &&
+
 	test_must_fail git show-ref -d --verify master >actual &&
-	test_must_be_empty actual &&
+	test_cmp expect actual &&
 
 	test_must_fail git show-ref -d --verify heads/master >actual &&
-	test_must_be_empty actual &&
+	test_cmp expect actual &&
 
 	test_must_fail git show-ref --verify -d A C >actual &&
-	test_must_be_empty actual &&
+	test_cmp expect actual &&
 
 	test_must_fail git show-ref --verify -d tags/A tags/C >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 
 '
 
@@ -168,8 +178,10 @@ test_expect_success 'show-ref --verify HEAD' '
 	git show-ref --verify HEAD >actual &&
 	test_cmp expect actual &&
 
+	>expect &&
+
 	git show-ref --verify -q HEAD >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 '
 
 test_expect_success 'show-ref --verify with dangling ref' '

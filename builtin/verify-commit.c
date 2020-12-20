@@ -8,10 +8,9 @@
 #include "cache.h"
 #include "config.h"
 #include "builtin.h"
-#include "object-store.h"
-#include "repository.h"
 #include "commit.h"
 #include "run-command.h"
+#include <signal.h>
 #include "parse-options.h"
 #include "gpg-interface.h"
 
@@ -20,14 +19,14 @@ static const char * const verify_commit_usage[] = {
 		NULL
 };
 
-static int run_gpg_verify(struct commit *commit, unsigned flags)
+static int run_gpg_verify(const struct object_id *oid, const char *buf, unsigned long size, unsigned flags)
 {
 	struct signature_check signature_check;
 	int ret;
 
 	memset(&signature_check, 0, sizeof(signature_check));
 
-	ret = check_commit_signature(commit, &signature_check);
+	ret = check_commit_signature(lookup_commit(oid), &signature_check);
 	print_signature_buffer(&signature_check, flags);
 
 	signature_check_clear(&signature_check);
@@ -36,20 +35,26 @@ static int run_gpg_verify(struct commit *commit, unsigned flags)
 
 static int verify_commit(const char *name, unsigned flags)
 {
+	enum object_type type;
 	struct object_id oid;
-	struct object *obj;
+	char *buf;
+	unsigned long size;
+	int ret;
 
 	if (get_oid(name, &oid))
 		return error("commit '%s' not found.", name);
 
-	obj = parse_object(the_repository, &oid);
-	if (!obj)
+	buf = read_sha1_file(oid.hash, &type, &size);
+	if (!buf)
 		return error("%s: unable to read file.", name);
-	if (obj->type != OBJ_COMMIT)
+	if (type != OBJ_COMMIT)
 		return error("%s: cannot verify a non-commit object of type %s.",
-				name, type_name(obj->type));
+				name, typename(type));
 
-	return run_gpg_verify((struct commit *)obj, flags);
+	ret = run_gpg_verify(&oid, buf, size, flags);
+
+	free(buf);
+	return ret;
 }
 
 static int git_verify_commit_config(const char *var, const char *value, void *cb)

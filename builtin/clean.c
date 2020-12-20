@@ -6,7 +6,6 @@
  * Based on git-clean.sh by Pavel Roskin
  */
 
-#define USE_THE_INDEX_COMPATIBILITY_MACROS
 #include "builtin.h"
 #include "cache.h"
 #include "config.h"
@@ -17,8 +16,6 @@
 #include "column.h"
 #include "color.h"
 #include "pathspec.h"
-#include "help.h"
-#include "prompt.h"
 
 static int force = -1; /* unset */
 static int interactive;
@@ -34,12 +31,7 @@ static const char *msg_remove = N_("Removing %s\n");
 static const char *msg_would_remove = N_("Would remove %s\n");
 static const char *msg_skip_git_dir = N_("Skipping repository %s\n");
 static const char *msg_would_skip_git_dir = N_("Would skip repository %s\n");
-#ifndef CAN_UNLINK_MOUNT_POINTS
-static const char *msg_skip_mount_point = N_("Skipping mount point %s\n");
-static const char *msg_would_skip_mount_point = N_("Would skip mount point %s\n");
-#endif
 static const char *msg_warn_remove_failed = N_("failed to remove %s");
-static const char *msg_warn_lstat_failed = N_("could not lstat %s\n");
 
 enum color_clean {
 	CLEAN_COLOR_RESET = 0,
@@ -48,15 +40,6 @@ enum color_clean {
 	CLEAN_COLOR_HEADER = 3,
 	CLEAN_COLOR_HELP = 4,
 	CLEAN_COLOR_ERROR = 5
-};
-
-static const char *color_interactive_slots[] = {
-	[CLEAN_COLOR_ERROR]  = "error",
-	[CLEAN_COLOR_HEADER] = "header",
-	[CLEAN_COLOR_HELP]   = "help",
-	[CLEAN_COLOR_PLAIN]  = "plain",
-	[CLEAN_COLOR_PROMPT] = "prompt",
-	[CLEAN_COLOR_RESET]  = "reset",
 };
 
 static int clean_use_color = -1;
@@ -99,7 +82,22 @@ struct menu_stuff {
 	void *stuff;
 };
 
-define_list_config_array(color_interactive_slots);
+static int parse_clean_color_slot(const char *var)
+{
+	if (!strcasecmp(var, "reset"))
+		return CLEAN_COLOR_RESET;
+	if (!strcasecmp(var, "plain"))
+		return CLEAN_COLOR_PLAIN;
+	if (!strcasecmp(var, "prompt"))
+		return CLEAN_COLOR_PROMPT;
+	if (!strcasecmp(var, "header"))
+		return CLEAN_COLOR_HEADER;
+	if (!strcasecmp(var, "help"))
+		return CLEAN_COLOR_HELP;
+	if (!strcasecmp(var, "error"))
+		return CLEAN_COLOR_ERROR;
+	return -1;
+}
 
 static int git_clean_config(const char *var, const char *value, void *cb)
 {
@@ -115,7 +113,7 @@ static int git_clean_config(const char *var, const char *value, void *cb)
 		return 0;
 	}
 	if (skip_prefix(var, "color.interactive.", &slot_name)) {
-		int slot = LOOKUP_CONFIG(color_interactive_slots, slot_name);
+		int slot = parse_clean_color_slot(slot_name);
 		if (slot < 0)
 			return 0;
 		if (!value)
@@ -147,7 +145,6 @@ static void clean_print_color(enum color_clean ix)
 static int exclude_cb(const struct option *opt, const char *arg, int unset)
 {
 	struct string_list *exclude_list = opt->value;
-	BUG_ON_OPT_NEG(unset);
 	string_list_append(exclude_list, arg);
 	return 0;
 }
@@ -163,38 +160,14 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 
 	*dir_gone = 1;
 
-	if ((force_flag & REMOVE_DIR_KEEP_NESTED_GIT) &&
-	    is_nonbare_repository_dir(path)) {
+	if ((force_flag & REMOVE_DIR_KEEP_NESTED_GIT) && is_nonbare_repository_dir(path)) {
 		if (!quiet) {
-			quote_path(path->buf, prefix, &quoted, 0);
+			quote_path_relative(path->buf, prefix, &quoted);
 			printf(dry_run ?  _(msg_would_skip_git_dir) : _(msg_skip_git_dir),
 					quoted.buf);
 		}
 
 		*dir_gone = 0;
-		goto out;
-	}
-
-	if (is_mount_point(path)) {
-#ifndef CAN_UNLINK_MOUNT_POINTS
-		if (!quiet) {
-			quote_path(path->buf, prefix, &quoted, 0);
-			printf(dry_run ?
-			       _(msg_would_skip_mount_point) :
-			       _(msg_skip_mount_point), quoted.buf);
-		}
-		*dir_gone = 0;
-#else
-		if (!dry_run && unlink(path->buf)) {
-			int saved_errno = errno;
-			quote_path(path->buf, prefix, &quoted, 0);
-			errno = saved_errno;
-			warning_errno(_(msg_warn_remove_failed), quoted.buf);
-			*dir_gone = 0;
-			ret = -1;
-		}
-#endif
-
 		goto out;
 	}
 
@@ -204,7 +177,7 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 		res = dry_run ? 0 : rmdir(path->buf);
 		if (res) {
 			int saved_errno = errno;
-			quote_path(path->buf, prefix, &quoted, 0);
+			quote_path_relative(path->buf, prefix, &quoted);
 			errno = saved_errno;
 			warning_errno(_(msg_warn_remove_failed), quoted.buf);
 			*dir_gone = 0;
@@ -224,12 +197,13 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 		strbuf_setlen(path, len);
 		strbuf_addstr(path, e->d_name);
 		if (lstat(path->buf, &st))
-			warning_errno(_(msg_warn_lstat_failed), path->buf);
+			warning("Could not stat path '%s': %s",
+				path->buf, strerror(errno));
 		else if (S_ISDIR(st.st_mode)) {
 			if (remove_dirs(path, prefix, force_flag, dry_run, quiet, &gone))
 				ret = 1;
 			if (gone) {
-				quote_path(path->buf, prefix, &quoted, 0);
+				quote_path_relative(path->buf, prefix, &quoted);
 				string_list_append(&dels, quoted.buf);
 			} else
 				*dir_gone = 0;
@@ -237,11 +211,11 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 		} else {
 			res = dry_run ? 0 : unlink(path->buf);
 			if (!res) {
-				quote_path(path->buf, prefix, &quoted, 0);
+				quote_path_relative(path->buf, prefix, &quoted);
 				string_list_append(&dels, quoted.buf);
 			} else {
 				int saved_errno = errno;
-				quote_path(path->buf, prefix, &quoted, 0);
+				quote_path_relative(path->buf, prefix, &quoted);
 				errno = saved_errno;
 				warning_errno(_(msg_warn_remove_failed), quoted.buf);
 				*dir_gone = 0;
@@ -265,7 +239,7 @@ static int remove_dirs(struct strbuf *path, const char *prefix, int force_flag,
 			*dir_gone = 1;
 		else {
 			int saved_errno = errno;
-			quote_path(path->buf, prefix, &quoted, 0);
+			quote_path_relative(path->buf, prefix, &quoted);
 			errno = saved_errno;
 			warning_errno(_(msg_warn_remove_failed), quoted.buf);
 			*dir_gone = 0;
@@ -293,7 +267,7 @@ static void pretty_print_dels(void)
 	struct column_options copts;
 
 	for_each_string_list_item(item, &del_list) {
-		qname = quote_path(item->string, NULL, &buf, 0);
+		qname = quote_path_relative(item->string, NULL, &buf);
 		string_list_append(&list, qname);
 	}
 
@@ -447,6 +421,7 @@ static int find_unique(const char *choice, struct menu_stuff *menu_stuff)
 	}
 	return found;
 }
+
 
 /*
  * Parse user input, and return choice(s) for menu (menu_stuff).
@@ -607,7 +582,10 @@ static int *list_and_choose(struct menu_opts *opts, struct menu_stuff *stuff)
 			       clean_get_color(CLEAN_COLOR_RESET));
 		}
 
-		if (git_read_line_interactively(&choice) == EOF) {
+		fflush(stdout);
+		if (strbuf_getline_lf(&choice, stdin) != EOF) {
+			strbuf_trim(&choice);
+		} else {
 			eof = 1;
 			break;
 		}
@@ -674,7 +652,7 @@ static int filter_by_patterns_cmd(void)
 	struct strbuf confirm = STRBUF_INIT;
 	struct strbuf **ignore_list;
 	struct string_list_item *item;
-	struct pattern_list *pl;
+	struct exclude_list *el;
 	int changed = -1, i;
 
 	for (;;) {
@@ -687,15 +665,18 @@ static int filter_by_patterns_cmd(void)
 		clean_print_color(CLEAN_COLOR_PROMPT);
 		printf(_("Input ignore patterns>> "));
 		clean_print_color(CLEAN_COLOR_RESET);
-		if (git_read_line_interactively(&confirm) == EOF)
+		fflush(stdout);
+		if (strbuf_getline_lf(&confirm, stdin) != EOF)
+			strbuf_trim(&confirm);
+		else
 			putchar('\n');
 
 		/* quit filter_by_pattern mode if press ENTER or Ctrl-D */
 		if (!confirm.len)
 			break;
 
-		dir_init(&dir);
-		pl = add_pattern_list(&dir, EXC_CMDL, "manual exclude");
+		memset(&dir, 0, sizeof(dir));
+		el = add_exclude_list(&dir, EXC_CMDL, "manual exclude");
 		ignore_list = strbuf_split_max(&confirm, ' ', 0);
 
 		for (i = 0; ignore_list[i]; i++) {
@@ -703,7 +684,7 @@ static int filter_by_patterns_cmd(void)
 			if (!ignore_list[i]->len)
 				continue;
 
-			add_pattern(ignore_list[i]->buf, "", 0, pl, -(i+1));
+			add_exclude(ignore_list[i]->buf, "", 0, el, -(i+1));
 		}
 
 		changed = 0;
@@ -725,7 +706,7 @@ static int filter_by_patterns_cmd(void)
 		}
 
 		strbuf_list_free(ignore_list);
-		dir_clear(&dir);
+		clear_directory(&dir);
 	}
 
 	strbuf_release(&confirm);
@@ -780,10 +761,13 @@ static int ask_each_cmd(void)
 	for_each_string_list_item(item, &del_list) {
 		/* Ctrl-D should stop removing files */
 		if (!eof) {
-			qname = quote_path(item->string, NULL, &buf, 0);
+			qname = quote_path_relative(item->string, NULL, &buf);
 			/* TRANSLATORS: Make sure to keep [y/N] as is */
 			printf(_("Remove %s [y/N]? "), qname);
-			if (git_read_line_interactively(&confirm) == EOF) {
+			fflush(stdout);
+			if (strbuf_getline_lf(&confirm, stdin) != EOF) {
+				strbuf_trim(&confirm);
+			} else {
 				putchar('\n');
 				eof = 1;
 			}
@@ -923,18 +907,18 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 	struct pathspec pathspec;
 	struct strbuf buf = STRBUF_INIT;
 	struct string_list exclude_list = STRING_LIST_INIT_NODUP;
-	struct pattern_list *pl;
+	struct exclude_list *el;
 	struct string_list_item *item;
 	const char *qname;
 	struct option options[] = {
 		OPT__QUIET(&quiet, N_("do not print names of files removed")),
 		OPT__DRY_RUN(&dry_run, N_("dry run")),
-		OPT__FORCE(&force, N_("force"), PARSE_OPT_NOCOMPLETE),
+		OPT__FORCE(&force, N_("force")),
 		OPT_BOOL('i', "interactive", &interactive, N_("interactive cleaning")),
 		OPT_BOOL('d', NULL, &remove_directories,
 				N_("remove whole directories")),
-		OPT_CALLBACK_F('e', "exclude", &exclude_list, N_("pattern"),
-		  N_("add <pattern> to ignore rules"), PARSE_OPT_NONEG, exclude_cb),
+		{ OPTION_CALLBACK, 'e', "exclude", &exclude_list, N_("pattern"),
+		  N_("add <pattern> to ignore rules"), PARSE_OPT_NONEG, exclude_cb },
 		OPT_BOOL('x', NULL, &ignored, N_("remove ignored files, too")),
 		OPT_BOOL('X', NULL, &ignored_only,
 				N_("remove only ignored files")),
@@ -950,7 +934,13 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 	argc = parse_options(argc, argv, prefix, options, builtin_clean_usage,
 			     0);
 
-	dir_init(&dir);
+	memset(&dir, 0, sizeof(dir));
+	if (ignored_only)
+		dir.flags |= DIR_SHOW_IGNORED;
+
+	if (ignored && ignored_only)
+		die(_("-x and -X cannot be used together"));
+
 	if (!interactive && !dry_run && !force) {
 		if (config_set)
 			die(_("clean.requireForce set to true and neither -i, -n, nor -f given; "
@@ -962,65 +952,21 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 
 	if (force > 1)
 		rm_flags = 0;
-	else
-		dir.flags |= DIR_SKIP_NESTED_GIT;
 
 	dir.flags |= DIR_SHOW_OTHER_DIRECTORIES;
 
-	if (ignored && ignored_only)
-		die(_("-x and -X cannot be used together"));
-	if (!ignored)
-		setup_standard_excludes(&dir);
-	if (ignored_only)
-		dir.flags |= DIR_SHOW_IGNORED;
-
-	if (argc) {
-		/*
-		 * Remaining args implies pathspecs specified, and we should
-		 * recurse within those.
-		 */
-		remove_directories = 1;
-	}
-
-	if (remove_directories && !ignored_only) {
-		/*
-		 * We need to know about ignored files too:
-		 *
-		 * If (ignored), then we will delete ignored files as well.
-		 *
-		 * If (!ignored), then even though we not are doing
-		 * anything with ignored files, we need to know about them
-		 * so that we can avoid deleting a directory of untracked
-		 * files that also contains an ignored file within it.
-		 *
-		 * For the (!ignored) case, since we only need to avoid
-		 * deleting ignored files, we can set
-		 * DIR_SHOW_IGNORED_TOO_MODE_MATCHING in order to avoid
-		 * recursing into a directory which is itself ignored.
-		 */
-		dir.flags |= DIR_SHOW_IGNORED_TOO;
-		if (!ignored)
-			dir.flags |= DIR_SHOW_IGNORED_TOO_MODE_MATCHING;
-
-		/*
-		 * Let the fill_directory() machinery know that we aren't
-		 * just recursing to collect the ignored files; we want all
-		 * the untracked ones so that we can delete them.  (Note:
-		 * we could also set DIR_KEEP_UNTRACKED_CONTENTS when
-		 * ignored_only is true, since DIR_KEEP_UNTRACKED_CONTENTS
-		 * only has effect in combination with DIR_SHOW_IGNORED_TOO.  It makes
-		 * the code clearer to exclude it, though.
-		 */
-		dir.flags |= DIR_KEEP_UNTRACKED_CONTENTS;
-	}
+	if (remove_directories)
+		dir.flags |= DIR_SHOW_IGNORED_TOO | DIR_KEEP_UNTRACKED_CONTENTS;
 
 	if (read_cache() < 0)
 		die(_("index file corrupt"));
-	enable_fscache(active_nr);
 
-	pl = add_pattern_list(&dir, EXC_CMDL, "--exclude option");
+	if (!ignored)
+		setup_standard_excludes(&dir);
+
+	el = add_exclude_list(&dir, EXC_CMDL, "--exclude option");
 	for (i = 0; i < exclude_list.nr; i++)
-		add_pattern(exclude_list.items[i].string, "", 0, pl, -(i+1));
+		add_exclude(exclude_list.items[i].string, "", 0, el, -(i+1));
 
 	parse_pathspec(&pathspec, 0,
 		       PATHSPEC_PREFER_CWD,
@@ -1038,6 +984,12 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 		if (!cache_name_is_other(ent->name, ent->len))
 			continue;
 
+		if (pathspec.nr)
+			matches = dir_path_match(ent, &pathspec, 0, NULL);
+
+		if (pathspec.nr && !matches)
+			continue;
+
 		if (lstat(ent->name, &st))
 			die_errno("Cannot lstat '%s'", ent->name);
 
@@ -1049,7 +1001,11 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 		string_list_append(&del_list, rel);
 	}
 
-	dir_clear(&dir);
+	for (i = 0; i < dir.nr; i++)
+		free(dir.entries[i]);
+
+	for (i = 0; i < dir.ignored_nr; i++)
+		free(dir.ignored[i]);
 
 	if (interactive && del_list.nr > 0)
 		interactive_main_loop();
@@ -1057,7 +1013,6 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 	for_each_string_list_item(item, &del_list) {
 		struct stat st;
 
-		strbuf_reset(&abs_path);
 		if (prefix)
 			strbuf_addstr(&abs_path, prefix);
 
@@ -1075,25 +1030,25 @@ int cmd_clean(int argc, const char **argv, const char *prefix)
 			if (remove_dirs(&abs_path, prefix, rm_flags, dry_run, quiet, &gone))
 				errors++;
 			if (gone && !quiet) {
-				qname = quote_path(item->string, NULL, &buf, 0);
+				qname = quote_path_relative(item->string, NULL, &buf);
 				printf(dry_run ? _(msg_would_remove) : _(msg_remove), qname);
 			}
 		} else {
 			res = dry_run ? 0 : unlink(abs_path.buf);
 			if (res) {
 				int saved_errno = errno;
-				qname = quote_path(item->string, NULL, &buf, 0);
+				qname = quote_path_relative(item->string, NULL, &buf);
 				errno = saved_errno;
 				warning_errno(_(msg_warn_remove_failed), qname);
 				errors++;
 			} else if (!quiet) {
-				qname = quote_path(item->string, NULL, &buf, 0);
+				qname = quote_path_relative(item->string, NULL, &buf);
 				printf(dry_run ? _(msg_would_remove) : _(msg_remove), qname);
 			}
 		}
+		strbuf_reset(&abs_path);
 	}
 
-	disable_fscache();
 	strbuf_release(&abs_path);
 	strbuf_release(&buf);
 	string_list_clear(&del_list, 0);

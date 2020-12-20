@@ -3,41 +3,33 @@
 
 #include "string-list.h"
 
-struct object_id;
-struct strbuf;
-
 /*
  * Function type for combining two notes annotating the same object.
  *
  * When adding a new note annotating the same object as an existing note, it is
  * up to the caller to decide how to combine the two notes. The decision is
  * made by passing in a function of the following form. The function accepts
- * two object_ids -- of the existing note and the new note, respectively. The
+ * two SHA1s -- of the existing note and the new note, respectively. The
  * function then combines the notes in whatever way it sees fit, and writes the
- * resulting oid into the first argument (cur_oid). A non-zero return
+ * resulting SHA1 into the first SHA1 argument (cur_sha1). A non-zero return
  * value indicates failure.
  *
- * The two given object_ids shall both be non-NULL and different from each
- * other. Either of them (but not both) may be == null_oid, which indicates an
- * empty/non-existent note. If the resulting oid (cur_oid) is == null_oid,
+ * The two given SHA1s shall both be non-NULL and different from each other.
+ * Either of them (but not both) may be == null_sha1, which indicates an
+ * empty/non-existent note. If the resulting SHA1 (cur_sha1) is == null_sha1,
  * the note will be removed from the notes tree.
  *
  * The default combine_notes function (you get this when passing NULL) is
  * combine_notes_concatenate(), which appends the contents of the new note to
  * the contents of the existing note.
  */
-typedef int (*combine_notes_fn)(struct object_id *cur_oid,
-				const struct object_id *new_oid);
+typedef int (*combine_notes_fn)(unsigned char *cur_sha1, const unsigned char *new_sha1);
 
 /* Common notes combinators */
-int combine_notes_concatenate(struct object_id *cur_oid,
-			      const struct object_id *new_oid);
-int combine_notes_overwrite(struct object_id *cur_oid,
-			    const struct object_id *new_oid);
-int combine_notes_ignore(struct object_id *cur_oid,
-			 const struct object_id *new_oid);
-int combine_notes_cat_sort_uniq(struct object_id *cur_oid,
-				const struct object_id *new_oid);
+int combine_notes_concatenate(unsigned char *cur_sha1, const unsigned char *new_sha1);
+int combine_notes_overwrite(unsigned char *cur_sha1, const unsigned char *new_sha1);
+int combine_notes_ignore(unsigned char *cur_sha1, const unsigned char *new_sha1);
+int combine_notes_cat_sort_uniq(unsigned char *cur_sha1, const unsigned char *new_sha1);
 
 /*
  * Notes tree object
@@ -220,7 +212,7 @@ int for_each_note(struct notes_tree *t, int flags, each_note_fn fn,
  * Write the given notes_tree structure to the object database
  *
  * Creates a new tree object encapsulating the current state of the given
- * notes_tree, and stores its object id into the 'result' argument.
+ * notes_tree, and stores its SHA1 into the 'result' argument.
  *
  * Returns zero on success, non-zero on failure.
  *
@@ -228,7 +220,7 @@ int for_each_note(struct notes_tree *t, int flags, each_note_fn fn,
  * this function has returned zero. Please also remember to create a
  * corresponding commit object, and update the appropriate notes ref.
  */
-int write_notes_tree(struct notes_tree *t, struct object_id *result);
+int write_notes_tree(struct notes_tree *t, unsigned char *result);
 
 /* Flags controlling the operation of prune */
 #define NOTES_PRUNE_VERBOSE 1
@@ -261,26 +253,6 @@ struct display_notes_opt {
 };
 
 /*
- * Initialize a display_notes_opt to its default value.
- */
-void init_display_notes(struct display_notes_opt *opt);
-
-/*
- * This family of functions enables or disables the display of notes. In
- * particular, 'enable_default_display_notes' will display the default notes,
- * 'enable_ref_display_notes' will display the notes ref 'ref' and
- * 'disable_display_notes' will disable notes, including those added by previous
- * invocations of the 'enable_*_display_notes' functions.
- *
- * 'show_notes' is a pointer to a boolean which will be set to 1 if notes are
- * displayed, else 0. It must not be NULL.
- */
-void enable_default_display_notes(struct display_notes_opt *opt, int *show_notes);
-void enable_ref_display_notes(struct display_notes_opt *opt, int *show_notes,
-		const char *ref);
-void disable_display_notes(struct display_notes_opt *opt, int *show_notes);
-
-/*
  * Load the notes machinery for displaying several notes trees.
  *
  * If 'opt' is not NULL, then it specifies additional settings for the
@@ -292,16 +264,18 @@ void disable_display_notes(struct display_notes_opt *opt, int *show_notes);
  * - extra_notes_refs may contain a list of globs (in the same style
  *   as notes.displayRef) where notes should be loaded from.
  */
-void load_display_notes(struct display_notes_opt *opt);
+void init_display_notes(struct display_notes_opt *opt);
 
 /*
  * Append notes for the given 'object_sha1' from all trees set up by
- * load_display_notes() to 'sb'.
+ * init_display_notes() to 'sb'.  The 'flags' are a bitwise
+ * combination of
  *
- * If 'raw' is false the note will be indented by 4 places and
- * a 'Notes (refname):' header added.
+ * - NOTES_SHOW_HEADER: add a 'Notes (refname):' header
  *
- * You *must* call load_display_notes() before using this function.
+ * - NOTES_INDENT: indent the notes by 4 places
+ *
+ * You *must* call init_display_notes() before using this function.
  */
 void format_display_notes(const struct object_id *object_oid,
 			  struct strbuf *sb, const char *output_encoding, int raw);

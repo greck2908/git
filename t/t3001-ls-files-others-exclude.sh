@@ -210,7 +210,8 @@ test_expect_success 'subdirectory ignore (toplevel)' '
 		cd top &&
 		git ls-files -o --exclude-standard
 	) >actual &&
-	test_must_be_empty actual
+	>expect &&
+	test_cmp expect actual
 '
 
 test_expect_success 'subdirectory ignore (l1/l2)' '
@@ -218,7 +219,8 @@ test_expect_success 'subdirectory ignore (l1/l2)' '
 		cd top/l1/l2 &&
 		git ls-files -o --exclude-standard
 	) >actual &&
-	test_must_be_empty actual
+	>expect &&
+	test_cmp expect actual
 '
 
 test_expect_success 'subdirectory ignore (l1)' '
@@ -226,7 +228,8 @@ test_expect_success 'subdirectory ignore (l1)' '
 		cd top/l1 &&
 		git ls-files -o --exclude-standard
 	) >actual &&
-	test_must_be_empty actual
+	>expect &&
+	test_cmp expect actual
 '
 
 test_expect_success 'show/hide empty ignored directory (setup)' '
@@ -248,7 +251,8 @@ test_expect_success 'hide empty ignored directory with --no-empty-directory' '
 		cd top &&
 		git ls-files -o -i --exclude l1 --directory --no-empty-directory
 	) >actual &&
-	test_must_be_empty actual
+	>expect &&
+	test_cmp expect actual
 '
 
 test_expect_success 'show/hide empty ignored sub-directory (setup)' '
@@ -273,12 +277,14 @@ test_expect_success 'hide empty ignored sub-directory with --no-empty-directory'
 		cd top &&
 		git ls-files -o -i --exclude l1 --directory --no-empty-directory
 	) >actual &&
-	test_must_be_empty actual
+	>expect &&
+	test_cmp expect actual
 '
 
 test_expect_success 'pattern matches prefix completely' '
+	: >expect &&
 	git ls-files -i -o --exclude "/three/a.3[abc]" >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 '
 
 test_expect_success 'ls-files with "**" patterns' '
@@ -294,8 +300,9 @@ EOF
 
 
 test_expect_success 'ls-files with "**" patterns and no slashes' '
+	: >expect &&
 	git ls-files -o -i --exclude "one**a.1" >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 '
 
 test_done

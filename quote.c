@@ -1,6 +1,6 @@
 #include "cache.h"
 #include "quote.h"
-#include "strvec.h"
+#include "argv-array.h"
 
 int quote_path_fully = 1;
 
@@ -43,28 +43,6 @@ void sq_quote_buf(struct strbuf *dst, const char *src)
 	free(to_free);
 }
 
-void sq_quote_buf_pretty(struct strbuf *dst, const char *src)
-{
-	static const char ok_punct[] = "+,-./:=@_^";
-	const char *p;
-
-	/* Avoid losing a zero-length string by adding '' */
-	if (!*src) {
-		strbuf_addstr(dst, "''");
-		return;
-	}
-
-	for (p = src; *p; p++) {
-		if (!isalnum(*p) && !strchr(ok_punct, *p)) {
-			sq_quote_buf(dst, src);
-			return;
-		}
-	}
-
-	/* if we get here, we did not need quoting */
-	strbuf_addstr(dst, src);
-}
-
 void sq_quotef(struct strbuf *dst, const char *fmt, ...)
 {
 	struct strbuf src = STRBUF_INIT;
@@ -78,7 +56,7 @@ void sq_quotef(struct strbuf *dst, const char *fmt, ...)
 	strbuf_release(&src);
 }
 
-void sq_quote_argv(struct strbuf *dst, const char **argv)
+void sq_quote_argv(struct strbuf *dst, const char** argv, size_t maxlen)
 {
 	int i;
 
@@ -87,32 +65,8 @@ void sq_quote_argv(struct strbuf *dst, const char **argv)
 	for (i = 0; argv[i]; ++i) {
 		strbuf_addch(dst, ' ');
 		sq_quote_buf(dst, argv[i]);
-	}
-}
-
-/*
- * Legacy function to append each argv value, quoted as necessasry,
- * with whitespace before each value.  This results in a leading
- * space in the result.
- */
-void sq_quote_argv_pretty(struct strbuf *dst, const char **argv)
-{
-	if (argv[0])
-		strbuf_addch(dst, ' ');
-	sq_append_quote_argv_pretty(dst, argv);
-}
-
-/*
- * Append each argv value, quoted as necessary, with whitespace between them.
- */
-void sq_append_quote_argv_pretty(struct strbuf *dst, const char **argv)
-{
-	int i;
-
-	for (i = 0; argv[i]; i++) {
-		if (i > 0)
-			strbuf_addch(dst, ' ');
-		sq_quote_buf_pretty(dst, argv[i]);
+		if (maxlen && dst->len > maxlen)
+			die("Too many or long arguments");
 	}
 }
 
@@ -140,15 +94,9 @@ static char *sq_dequote_step(char *arg, char **next)
 				*next = NULL;
 			return arg;
 		case '\\':
-			/*
-			 * Allow backslashed characters outside of
-			 * single-quotes only if they need escaping,
-			 * and only if we resume the single-quoted part
-			 * afterward.
-			 */
-			if (need_bs_quote(src[1]) && src[2] == '\'') {
-				*dst++ = src[1];
-				src += 2;
+			c = *++src;
+			if (need_bs_quote(c) && *++src == '\'') {
+				*dst++ = c;
 				continue;
 			}
 		/* Fallthrough */
@@ -172,7 +120,7 @@ char *sq_dequote(char *arg)
 
 static int sq_dequote_to_argv_internal(char *arg,
 				       const char ***argv, int *nr, int *alloc,
-				       struct strvec *array)
+				       struct argv_array *array)
 {
 	char *next = arg;
 
@@ -187,7 +135,7 @@ static int sq_dequote_to_argv_internal(char *arg,
 			(*argv)[(*nr)++] = dequoted;
 		}
 		if (array)
-			strvec_push(array, dequoted);
+			argv_array_push(array, dequoted);
 	} while (next);
 
 	return 0;
@@ -198,7 +146,7 @@ int sq_dequote_to_argv(char *arg, const char ***argv, int *nr, int *alloc)
 	return sq_dequote_to_argv_internal(arg, argv, nr, alloc, NULL);
 }
 
-int sq_dequote_to_strvec(char *arg, struct strvec *array)
+int sq_dequote_to_argv_array(char *arg, struct argv_array *array)
 {
 	return sq_dequote_to_argv_internal(arg, NULL, NULL, NULL, array);
 }
@@ -210,7 +158,7 @@ int sq_dequote_to_strvec(char *arg, struct strvec *array)
  */
 #define X8(x)   x, x, x, x, x, x, x, x
 #define X16(x)  X8(x), X8(x)
-static signed char const cq_lookup[256] = {
+static signed char const sq_lookup[256] = {
 	/*           0    1    2    3    4    5    6    7 */
 	/* 0x00 */   1,   1,   1,   1,   1,   1,   1, 'a',
 	/* 0x08 */ 'b', 't', 'n', 'v', 'f', 'r',   1,   1,
@@ -223,9 +171,9 @@ static signed char const cq_lookup[256] = {
 	/* 0x80 */ /* set to 0 */
 };
 
-static inline int cq_must_quote(char c)
+static inline int sq_must_quote(char c)
 {
-	return cq_lookup[(unsigned char)c] + quote_path_fully > 0;
+	return sq_lookup[(unsigned char)c] + quote_path_fully > 0;
 }
 
 /* returns the longest prefix not needing a quote up to maxlen if positive.
@@ -235,9 +183,9 @@ static size_t next_quote_pos(const char *s, ssize_t maxlen)
 {
 	size_t len;
 	if (maxlen < 0) {
-		for (len = 0; !cq_must_quote(s[len]); len++);
+		for (len = 0; !sq_must_quote(s[len]); len++);
 	} else {
-		for (len = 0; len < maxlen && !cq_must_quote(s[len]); len++);
+		for (len = 0; len < maxlen && !sq_must_quote(s[len]); len++);
 	}
 	return len;
 }
@@ -256,7 +204,7 @@ static size_t next_quote_pos(const char *s, ssize_t maxlen)
  *     Return value is the same as in (1).
  */
 static size_t quote_c_style_counted(const char *name, ssize_t maxlen,
-				    struct strbuf *sb, FILE *fp, unsigned flags)
+                                    struct strbuf *sb, FILE *fp, int no_dq)
 {
 #undef EMIT
 #define EMIT(c)                                 \
@@ -272,7 +220,6 @@ static size_t quote_c_style_counted(const char *name, ssize_t maxlen,
 		count += (l);                           \
 	} while (0)
 
-	int no_dq = !!(flags & CQUOTE_NODQ);
 	size_t len, count = 0;
 	const char *p = name;
 
@@ -292,8 +239,8 @@ static size_t quote_c_style_counted(const char *name, ssize_t maxlen,
 		ch = (unsigned char)*p++;
 		if (maxlen >= 0)
 			maxlen -= len + 1;
-		if (cq_lookup[ch] >= ' ') {
-			EMIT(cq_lookup[ch]);
+		if (sq_lookup[ch] >= ' ') {
+			EMIT(sq_lookup[ch]);
 		} else {
 			EMIT(((ch >> 6) & 03) + '0');
 			EMIT(((ch >> 3) & 07) + '0');
@@ -310,21 +257,19 @@ static size_t quote_c_style_counted(const char *name, ssize_t maxlen,
 	return count;
 }
 
-size_t quote_c_style(const char *name, struct strbuf *sb, FILE *fp, unsigned flags)
+size_t quote_c_style(const char *name, struct strbuf *sb, FILE *fp, int nodq)
 {
-	return quote_c_style_counted(name, -1, sb, fp, flags);
+	return quote_c_style_counted(name, -1, sb, fp, nodq);
 }
 
-void quote_two_c_style(struct strbuf *sb, const char *prefix, const char *path,
-		       unsigned flags)
+void quote_two_c_style(struct strbuf *sb, const char *prefix, const char *path, int nodq)
 {
-	int nodq = !!(flags & CQUOTE_NODQ);
 	if (quote_c_style(prefix, NULL, NULL, 0) ||
 	    quote_c_style(path, NULL, NULL, 0)) {
 		if (!nodq)
 			strbuf_addch(sb, '"');
-		quote_c_style(prefix, sb, NULL, CQUOTE_NODQ);
-		quote_c_style(path, sb, NULL, CQUOTE_NODQ);
+		quote_c_style(prefix, sb, NULL, 1);
+		quote_c_style(path, sb, NULL, 1);
 		if (!nodq)
 			strbuf_addch(sb, '"');
 	} else {
@@ -355,25 +300,13 @@ void write_name_quoted_relative(const char *name, const char *prefix,
 }
 
 /* quote path as relative to the given prefix */
-char *quote_path(const char *in, const char *prefix, struct strbuf *out, unsigned flags)
+char *quote_path_relative(const char *in, const char *prefix,
+			  struct strbuf *out)
 {
 	struct strbuf sb = STRBUF_INIT;
 	const char *rel = relative_path(in, prefix, &sb);
-	int force_dq = ((flags & QUOTE_PATH_QUOTE_SP) && strchr(rel, ' '));
-
 	strbuf_reset(out);
-
-	/*
-	 * If the caller wants us to enclose the output in a dq-pair
-	 * whether quote_c_style_counted() needs to, we do it ourselves
-	 * and tell quote_c_style_counted() not to.
-	 */
-	if (force_dq)
-		strbuf_addch(out, '"');
-	quote_c_style_counted(rel, strlen(rel), out, NULL,
-			      force_dq ? CQUOTE_NODQ : 0);
-	if (force_dq)
-		strbuf_addch(out, '"');
+	quote_c_style_counted(rel, strlen(rel), out, NULL, 0);
 	strbuf_release(&sb);
 
 	return out->buf;

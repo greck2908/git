@@ -8,10 +8,6 @@ test_description='Test repository version check'
 . ./test-lib.sh
 
 test_expect_success 'setup' '
-	test_oid_cache <<-\EOF &&
-	version sha1:0
-	version sha256:1
-	EOF
 	cat >test.patch <<-\EOF &&
 	diff --git a/test.txt b/test.txt
 	new file mode 100644
@@ -27,7 +23,7 @@ test_expect_success 'setup' '
 '
 
 test_expect_success 'gitdir selection on normal repos' '
-	echo $(test_oid version) >expect &&
+	echo 0 >expect &&
 	git config core.repositoryformatversion >actual &&
 	git -C test config core.repositoryformatversion >actual2 &&
 	test_cmp expect actual &&
@@ -87,9 +83,6 @@ allow 1
 allow 1 noop
 abort 1 no-such-extension
 allow 0 no-such-extension
-allow 0 noop
-abort 0 noop-v1
-allow 1 noop-v1
 EOF
 
 test_expect_success 'precious-objects allowed' '

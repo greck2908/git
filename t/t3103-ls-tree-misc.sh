@@ -17,8 +17,7 @@ test_expect_success 'setup' '
 '
 
 test_expect_success 'ls-tree fails with non-zero exit code on broken tree' '
-	tree=$(git rev-parse HEAD:a) &&
-	rm -f .git/objects/$(echo $tree | sed -e "s,^\(..\),\1/,") &&
+	rm -f .git/objects/5f/cffbd6e4c5c5b8d81f5e9314b20e338e3ffff5 &&
 	test_must_fail git ls-tree -r HEAD
 '
 

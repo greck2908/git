@@ -7,26 +7,21 @@
 #define VERIFY_PACK_VERBOSE 01
 #define VERIFY_PACK_STAT_ONLY 02
 
-static int verify_one_pack(const char *path, unsigned int flags, const char *hash_algo)
+static int verify_one_pack(const char *path, unsigned int flags)
 {
 	struct child_process index_pack = CHILD_PROCESS_INIT;
-	struct strvec *argv = &index_pack.args;
+	const char *argv[] = {"index-pack", NULL, NULL, NULL };
 	struct strbuf arg = STRBUF_INIT;
 	int verbose = flags & VERIFY_PACK_VERBOSE;
 	int stat_only = flags & VERIFY_PACK_STAT_ONLY;
 	int err;
 
-	strvec_push(argv, "index-pack");
-
 	if (stat_only)
-		strvec_push(argv, "--verify-stat-only");
+		argv[1] = "--verify-stat-only";
 	else if (verbose)
-		strvec_push(argv, "--verify-stat");
+		argv[1] = "--verify-stat";
 	else
-		strvec_push(argv, "--verify");
-
-	if (hash_algo)
-		strvec_pushf(argv, "--object-format=%s", hash_algo);
+		argv[1] = "--verify";
 
 	/*
 	 * In addition to "foo.pack" we accept "foo.idx" and "foo";
@@ -36,8 +31,9 @@ static int verify_one_pack(const char *path, unsigned int flags, const char *has
 	if (strbuf_strip_suffix(&arg, ".idx") ||
 	    !ends_with(arg.buf, ".pack"))
 		strbuf_addstr(&arg, ".pack");
-	strvec_push(argv, arg.buf);
+	argv[2] = arg.buf;
 
+	index_pack.argv = argv;
 	index_pack.git_cmd = 1;
 
 	err = run_command(&index_pack);
@@ -64,15 +60,12 @@ int cmd_verify_pack(int argc, const char **argv, const char *prefix)
 {
 	int err = 0;
 	unsigned int flags = 0;
-	const char *object_format = NULL;
 	int i;
 	const struct option verify_pack_options[] = {
 		OPT_BIT('v', "verbose", &flags, N_("verbose"),
 			VERIFY_PACK_VERBOSE),
 		OPT_BIT('s', "stat-only", &flags, N_("show statistics only"),
 			VERIFY_PACK_STAT_ONLY),
-		OPT_STRING(0, "object-format", &object_format, N_("hash"),
-			   N_("specify the hash algorithm to use")),
 		OPT_END()
 	};
 
@@ -82,7 +75,7 @@ int cmd_verify_pack(int argc, const char **argv, const char *prefix)
 	if (argc < 1)
 		usage_with_options(verify_pack_usage, verify_pack_options);
 	for (i = 0; i < argc; i++) {
-		if (verify_one_pack(argv[i], flags, object_format))
+		if (verify_one_pack(argv[i], flags))
 			err = 1;
 	}
 

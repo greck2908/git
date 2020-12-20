@@ -10,6 +10,7 @@
 #include "builtin.h"
 #include "tag.h"
 #include "run-command.h"
+#include <signal.h>
 #include "parse-options.h"
 #include "gpg-interface.h"
 #include "ref-filter.h"
@@ -71,7 +72,7 @@ int cmd_verify_tag(int argc, const char **argv, const char *prefix)
 		}
 
 		if (format.format)
-			pretty_print_ref(name, &oid, &format);
+			pretty_print_ref(name, oid.hash, &format);
 	}
 	return had_error;
 }

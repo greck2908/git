@@ -52,7 +52,7 @@ EXAMPLES
 
 SEE ALSO
 --------
-linkgit:gitremote-helpers[7]
+linkgit:gitremote-helpers[1]
 
 GIT
 ---

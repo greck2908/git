@@ -194,12 +194,10 @@ test_expect_success GPG 'fail without key and heed user.signingkey' '
 
 	EOF
 
-	test_config user.email hasnokey@nowhere.com &&
-	(
-		sane_unset GIT_COMMITTER_EMAIL &&
-		test_must_fail git push --signed dst noop ff +noff
-	) &&
-	test_config user.signingkey $GIT_COMMITTER_EMAIL &&
+	unset GIT_COMMITTER_EMAIL &&
+	git config user.email hasnokey@nowhere.com &&
+	test_must_fail git push --signed dst noop ff +noff &&
+	git config user.signingkey committer@example.com &&
 	git push --signed dst noop ff +noff &&
 
 	(
@@ -218,81 +216,6 @@ test_expect_success GPG 'fail without key and heed user.signingkey' '
 	grep "$noop $ff refs/heads/ff" dst/push-cert &&
 	grep "$noop $noff refs/heads/noff" dst/push-cert &&
 	test_cmp expect dst/push-cert-status
-'
-
-test_expect_success GPGSM 'fail without key and heed user.signingkey x509' '
-	test_config gpg.format x509 &&
-	prepare_dst &&
-	mkdir -p dst/.git/hooks &&
-	git -C dst config receive.certnonceseed sekrit &&
-	write_script dst/.git/hooks/post-receive <<-\EOF &&
-	# discard the update list
-	cat >/dev/null
-	# record the push certificate
-	if test -n "${GIT_PUSH_CERT-}"
-	then
-		git cat-file blob $GIT_PUSH_CERT >../push-cert
-	fi &&
-
-	cat >../push-cert-status <<E_O_F
-	SIGNER=${GIT_PUSH_CERT_SIGNER-nobody}
-	KEY=${GIT_PUSH_CERT_KEY-nokey}
-	STATUS=${GIT_PUSH_CERT_STATUS-nostatus}
-	NONCE_STATUS=${GIT_PUSH_CERT_NONCE_STATUS-nononcestatus}
-	NONCE=${GIT_PUSH_CERT_NONCE-nononce}
-	E_O_F
-
-	EOF
-
-	test_config user.email hasnokey@nowhere.com &&
-	test_config user.signingkey "" &&
-	(
-		sane_unset GIT_COMMITTER_EMAIL &&
-		test_must_fail git push --signed dst noop ff +noff
-	) &&
-	test_config user.signingkey $GIT_COMMITTER_EMAIL &&
-	git push --signed dst noop ff +noff &&
-
-	(
-		cat <<-\EOF &&
-		SIGNER=/CN=C O Mitter/O=Example/SN=C O/GN=Mitter
-		KEY=
-		STATUS=G
-		NONCE_STATUS=OK
-		EOF
-		sed -n -e "s/^nonce /NONCE=/p" -e "/^$/q" dst/push-cert
-	) >expect.in &&
-	key=$(cat "${GNUPGHOME}/trustlist.txt" | cut -d" " -f1 | tr -d ":") &&
-	sed -e "s/^KEY=/KEY=${key}/" expect.in >expect &&
-
-	noop=$(git rev-parse noop) &&
-	ff=$(git rev-parse ff) &&
-	noff=$(git rev-parse noff) &&
-	grep "$noop $ff refs/heads/ff" dst/push-cert &&
-	grep "$noop $noff refs/heads/noff" dst/push-cert &&
-	test_cmp expect dst/push-cert-status
-'
-
-test_expect_success GPG 'failed atomic push does not execute GPG' '
-	prepare_dst &&
-	git -C dst config receive.certnonceseed sekrit &&
-	write_script gpg <<-EOF &&
-	# should check atomic push locally before running GPG.
-	exit 1
-	EOF
-	test_must_fail env PATH="$TRASH_DIRECTORY:$PATH" git push \
-			--signed --atomic --porcelain \
-			dst noop ff noff >out 2>err &&
-
-	test_i18ngrep ! "gpg failed to sign" err &&
-	cat >expect <<-EOF &&
-	To dst
-	=	refs/heads/noop:refs/heads/noop	[up to date]
-	!	refs/heads/ff:refs/heads/ff	[rejected] (atomic push failed)
-	!	refs/heads/noff:refs/heads/noff	[rejected] (non-fast-forward)
-	Done
-	EOF
-	test_cmp expect out
 '
 
 test_done

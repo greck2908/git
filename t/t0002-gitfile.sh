@@ -10,6 +10,15 @@ objpath() {
 	echo "$1" | sed -e 's|\(..\)|\1/|'
 }
 
+objck() {
+	p=$(objpath "$1")
+	if test ! -f "$REAL/objects/$p"
+	then
+		echo "Object not found: $REAL/objects/$p"
+		false
+	fi
+}
+
 test_expect_success 'initial setup' '
 	REAL="$(pwd)/.real" &&
 	mv .git "$REAL"
@@ -17,14 +26,30 @@ test_expect_success 'initial setup' '
 
 test_expect_success 'bad setup: invalid .git file format' '
 	echo "gitdir $REAL" >.git &&
-	test_must_fail git rev-parse 2>.err &&
-	test_i18ngrep "invalid gitfile format" .err
+	if git rev-parse 2>.err
+	then
+		echo "git rev-parse accepted an invalid .git file"
+		false
+	fi &&
+	if ! grep "Invalid gitfile format" .err
+	then
+		echo "git rev-parse returned wrong error"
+		false
+	fi
 '
 
 test_expect_success 'bad setup: invalid .git file path' '
 	echo "gitdir: $REAL.not" >.git &&
-	test_must_fail git rev-parse 2>.err &&
-	test_i18ngrep "not a git repository" .err
+	if git rev-parse 2>.err
+	then
+		echo "git rev-parse accepted an invalid .git file path"
+		false
+	fi &&
+	if ! grep "Not a git repository" .err
+	then
+		echo "git rev-parse returned wrong error"
+		false
+	fi
 '
 
 test_expect_success 'final setup + check rev-parse --git-dir' '
@@ -35,7 +60,7 @@ test_expect_success 'final setup + check rev-parse --git-dir' '
 test_expect_success 'check hash-object' '
 	echo "foo" >bar &&
 	SHA=$(cat bar | git hash-object -w --stdin) &&
-	test_path_is_file "$REAL/objects/$(objpath $SHA)"
+	objck $SHA
 '
 
 test_expect_success 'check cat-file' '
@@ -44,25 +69,33 @@ test_expect_success 'check cat-file' '
 '
 
 test_expect_success 'check update-index' '
-	test_path_is_missing "$REAL/index" &&
+	if test -f "$REAL/index"
+	then
+		echo "Hmm, $REAL/index exists?"
+		false
+	fi &&
 	rm -f "$REAL/objects/$(objpath $SHA)" &&
 	git update-index --add bar &&
-	test_path_is_file "$REAL/index" &&
-	test_path_is_file "$REAL/objects/$(objpath $SHA)"
+	if ! test -f "$REAL/index"
+	then
+		echo "$REAL/index not found"
+		false
+	fi &&
+	objck $SHA
 '
 
 test_expect_success 'check write-tree' '
 	SHA=$(git write-tree) &&
-	test_path_is_file "$REAL/objects/$(objpath $SHA)"
+	objck $SHA
 '
 
 test_expect_success 'check commit-tree' '
 	SHA=$(echo "commit bar" | git commit-tree $SHA) &&
-	test_path_is_file "$REAL/objects/$(objpath $SHA)"
+	objck $SHA
 '
 
 test_expect_success 'check rev-list' '
-	git update-ref "HEAD" "$SHA" &&
+	echo $SHA >"$REAL/HEAD" &&
 	test "$SHA" = "$(git rev-list HEAD)"
 '
 
@@ -92,12 +125,11 @@ test_expect_success 'enter_repo non-strict mode' '
 		mv .git .realgit &&
 		echo "gitdir: .realgit" >.git
 	) &&
-	head=$(git -C enter_repo rev-parse HEAD) &&
 	git ls-remote enter_repo >actual &&
-	cat >expected <<-EOF &&
-	$head	HEAD
-	$head	refs/heads/master
-	$head	refs/tags/foo
+	cat >expected <<-\EOF &&
+	946e985ab20de757ca5b872b16d64e92ff3803a9	HEAD
+	946e985ab20de757ca5b872b16d64e92ff3803a9	refs/heads/master
+	946e985ab20de757ca5b872b16d64e92ff3803a9	refs/tags/foo
 	EOF
 	test_cmp expected actual
 '
@@ -107,23 +139,21 @@ test_expect_success 'enter_repo linked checkout' '
 		cd enter_repo &&
 		git worktree add  ../foo refs/tags/foo
 	) &&
-	head=$(git -C enter_repo rev-parse HEAD) &&
 	git ls-remote foo >actual &&
-	cat >expected <<-EOF &&
-	$head	HEAD
-	$head	refs/heads/master
-	$head	refs/tags/foo
+	cat >expected <<-\EOF &&
+	946e985ab20de757ca5b872b16d64e92ff3803a9	HEAD
+	946e985ab20de757ca5b872b16d64e92ff3803a9	refs/heads/master
+	946e985ab20de757ca5b872b16d64e92ff3803a9	refs/tags/foo
 	EOF
 	test_cmp expected actual
 '
 
 test_expect_success 'enter_repo strict mode' '
-	head=$(git -C enter_repo rev-parse HEAD) &&
 	git ls-remote --upload-pack="git upload-pack --strict" foo/.git >actual &&
-	cat >expected <<-EOF &&
-	$head	HEAD
-	$head	refs/heads/master
-	$head	refs/tags/foo
+	cat >expected <<-\EOF &&
+	946e985ab20de757ca5b872b16d64e92ff3803a9	HEAD
+	946e985ab20de757ca5b872b16d64e92ff3803a9	refs/heads/master
+	946e985ab20de757ca5b872b16d64e92ff3803a9	refs/tags/foo
 	EOF
 	test_cmp expected actual
 '

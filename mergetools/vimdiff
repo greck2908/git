@@ -5,7 +5,7 @@ diff_cmd () {
 
 merge_cmd () {
 	case "$1" in
-	*vimdiff)
+	gvimdiff|vimdiff)
 		if $base_present
 		then
 			"$merge_tool_path" -f -d -c '4wincmd w | wincmd J' \
@@ -15,11 +15,11 @@ merge_cmd () {
 				"$LOCAL" "$MERGED" "$REMOTE"
 		fi
 		;;
-	*vimdiff2)
+	gvimdiff2|vimdiff2)
 		"$merge_tool_path" -f -d -c 'wincmd l' \
 			"$LOCAL" "$MERGED" "$REMOTE"
 		;;
-	*vimdiff3)
+	gvimdiff3|vimdiff3)
 		if $base_present
 		then
 			"$merge_tool_path" -f -d -c 'hid | hid | hid' \
@@ -34,13 +34,10 @@ merge_cmd () {
 
 translate_merge_tool_path() {
 	case "$1" in
-	nvimdiff*)
-		echo nvim
-		;;
-	gvimdiff*)
+	gvimdiff|gvimdiff2|gvimdiff3)
 		echo gvim
 		;;
-	vimdiff*)
+	vimdiff|vimdiff2|vimdiff3)
 		echo vim
 		;;
 	esac
@@ -48,12 +45,4 @@ translate_merge_tool_path() {
 
 exit_code_trustable () {
 	true
-}
-
-list_tool_variants () {
-	for prefix in '' g n; do
-		for suffix in '' 2 3; do
-			echo "${prefix}vimdiff${suffix}"
-		done
-	done
 }

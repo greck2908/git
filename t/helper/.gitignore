@@ -1,2 +1,5 @@
-/test-tool
-/test-fake-ssh
+*
+!*.sh
+!*.[ch]
+!*.gitignore
+

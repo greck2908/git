@@ -1,10 +1,10 @@
 #ifndef OIDSET_H
 #define OIDSET_H
 
-#include "khash.h"
+#include "oidmap.h"
 
 /**
- * This API is similar to oid-array, in that it maintains a set of object ids
+ * This API is similar to sha1-array, in that it maintains a set of object ids
  * in a memory-efficient way. The major differences are:
  *
  *   1. It uses a hash, so we can do online duplicate removal, rather than
@@ -19,19 +19,16 @@
  * A single oidset; should be zero-initialized (or use OIDSET_INIT).
  */
 struct oidset {
-	kh_oid_set_t set;
+	struct oidmap map;
 };
 
-#define OIDSET_INIT { { 0 } }
+#define OIDSET_INIT { OIDMAP_INIT }
 
 
-/**
- * Initialize the oidset structure `set`.
- *
- * If `initial_size` is bigger than 0 then preallocate to allow inserting
- * the specified number of elements without further allocations.
- */
-void oidset_init(struct oidset *set, size_t initial_size);
+static inline void oidset_init(struct oidset *set, size_t initial_size)
+{
+	oidmap_init(&set->map, initial_size);
+}
 
 /**
  * Returns true iff `set` contains `oid`.
@@ -55,52 +52,25 @@ int oidset_insert(struct oidset *set, const struct object_id *oid);
 int oidset_remove(struct oidset *set, const struct object_id *oid);
 
 /**
- * Returns the number of oids in the set.
- */
-int oidset_size(struct oidset *set);
-
-/**
  * Remove all entries from the oidset, freeing any resources associated with
  * it.
  */
 void oidset_clear(struct oidset *set);
 
-/**
- * Add the contents of the file 'path' to an initialized oidset.  Each line is
- * an unabbreviated object name.  Comments begin with '#', and trailing comments
- * are allowed.  Leading whitespace and empty or white-space only lines are
- * ignored.
- */
-void oidset_parse_file(struct oidset *set, const char *path);
-
-/*
- * Similar to the above, but with a callback which can (1) return non-zero to
- * signal displeasure with the object and (2) replace object ID with something
- * else (meant to be used to "peel").
- */
-typedef int (*oidset_parse_tweak_fn)(struct object_id *, void *);
-void oidset_parse_file_carefully(struct oidset *set, const char *path,
-				 oidset_parse_tweak_fn fn, void *cbdata);
-
 struct oidset_iter {
-	kh_oid_set_t *set;
-	khiter_t iter;
+	struct oidmap_iter m_iter;
 };
 
 static inline void oidset_iter_init(struct oidset *set,
 				    struct oidset_iter *iter)
 {
-	iter->set = &set->set;
-	iter->iter = kh_begin(iter->set);
+	oidmap_iter_init(&set->map, &iter->m_iter);
 }
 
 static inline struct object_id *oidset_iter_next(struct oidset_iter *iter)
 {
-	for (; iter->iter != kh_end(iter->set); iter->iter++) {
-		if (kh_exist(iter->set, iter->iter))
-			return &kh_key(iter->set, iter->iter++);
-	}
-	return NULL;
+	struct oidmap_entry *e = oidmap_iter_next(&iter->m_iter);
+	return e ? &e->oid : NULL;
 }
 
 static inline struct object_id *oidset_iter_first(struct oidset *set,

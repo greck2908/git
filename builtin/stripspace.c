@@ -30,7 +30,6 @@ int cmd_stripspace(int argc, const char **argv, const char *prefix)
 {
 	struct strbuf buf = STRBUF_INIT;
 	enum stripspace_mode mode = STRIP_DEFAULT;
-	int nongit;
 
 	const struct option options[] = {
 		OPT_CMDMODE('s', "strip-comments", &mode,
@@ -47,7 +46,7 @@ int cmd_stripspace(int argc, const char **argv, const char *prefix)
 		usage_with_options(stripspace_usage, options);
 
 	if (mode == STRIP_COMMENTS || mode == COMMENT_LINES)
-		setup_git_directory_gently(&nongit);
+		setup_git_directory_gently(NULL);
 	git_config(git_default_config, NULL);
 
 	if (strbuf_read(&buf, 0, 1024) < 0)

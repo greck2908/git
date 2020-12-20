@@ -4,13 +4,12 @@
 #include "sigchain.h"
 #include "string-list.h"
 #include "strbuf.h"
-#include "strvec.h"
+#include "argv-array.h"
 #include "quote.h"
-#include "object-store.h"
 
 struct tmp_objdir {
 	struct strbuf path;
-	struct strvec env;
+	struct argv_array env;
 };
 
 /*
@@ -24,7 +23,7 @@ static struct tmp_objdir *the_tmp_objdir;
 static void tmp_objdir_free(struct tmp_objdir *t)
 {
 	strbuf_release(&t->path);
-	strvec_clear(&t->env);
+	argv_array_clear(&t->env);
 	free(t);
 }
 
@@ -79,7 +78,7 @@ static void remove_tmp_objdir_on_signal(int signo)
  * separated by PATH_SEP (which is what separate values in
  * GIT_ALTERNATE_OBJECT_DIRECTORIES).
  */
-static void env_append(struct strvec *env, const char *key, const char *val)
+static void env_append(struct argv_array *env, const char *key, const char *val)
 {
 	struct strbuf quoted = STRBUF_INIT;
 	const char *old;
@@ -97,16 +96,16 @@ static void env_append(struct strvec *env, const char *key, const char *val)
 
 	old = getenv(key);
 	if (!old)
-		strvec_pushf(env, "%s=%s", key, val);
+		argv_array_pushf(env, "%s=%s", key, val);
 	else
-		strvec_pushf(env, "%s=%s%c%s", key, old, PATH_SEP, val);
+		argv_array_pushf(env, "%s=%s%c%s", key, old, PATH_SEP, val);
 
 	strbuf_release(&quoted);
 }
 
-static void env_replace(struct strvec *env, const char *key, const char *val)
+static void env_replace(struct argv_array *env, const char *key, const char *val)
 {
-	strvec_pushf(env, "%s=%s", key, val);
+	argv_array_pushf(env, "%s=%s", key, val);
 }
 
 static int setup_tmp_objdir(const char *root)
@@ -127,11 +126,11 @@ struct tmp_objdir *tmp_objdir_create(void)
 	struct tmp_objdir *t;
 
 	if (the_tmp_objdir)
-		BUG("only one tmp_objdir can be used at a time");
+		die("BUG: only one tmp_objdir can be used at a time");
 
 	t = xmalloc(sizeof(*t));
 	strbuf_init(&t->path, 0);
-	strvec_init(&t->env);
+	argv_array_init(&t->env);
 
 	strbuf_addf(&t->path, "%s/incoming-XXXXXX", get_object_directory());
 
@@ -283,7 +282,7 @@ const char **tmp_objdir_env(const struct tmp_objdir *t)
 {
 	if (!t)
 		return NULL;
-	return t->env.v;
+	return t->env.argv;
 }
 
 void tmp_objdir_add_as_alternate(const struct tmp_objdir *t)

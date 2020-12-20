@@ -6,14 +6,9 @@ sub format_one {
 	my ($out, $nameattr) = @_;
 	my ($name, $attr) = @$nameattr;
 	my ($state, $description);
-	my $mansection;
 	$state = 0;
 	open I, '<', "$name.txt" or die "No such file $name.txt";
 	while (<I>) {
-		if (/^git[a-z0-9-]*\(([0-9])\)$/) {
-			$mansection = $1;
-			next;
-		}
 		if (/^NAME$/) {
 			$state = 1;
 			next;
@@ -32,7 +27,7 @@ sub format_one {
 		die "No description found in $name.txt";
 	}
 	if (my ($verify_name, $text) = ($description =~ /^($name) - (.*)/)) {
-		print $out "linkgit:$name\[$mansection\]::\n\t";
+		print $out "linkgit:$name\[1\]::\n\t";
 		if ($attr =~ / deprecated /) {
 			print $out "(deprecated) ";
 		}
@@ -43,15 +38,12 @@ sub format_one {
 	}
 }
 
-my ($input, @categories) = @ARGV;
-
-open IN, "<$input";
-while (<IN>) {
+while (<>) {
 	last if /^### command list/;
 }
 
 my %cmds = ();
-for (sort <IN>) {
+for (sort <>) {
 	next if /^#/;
 
 	chomp;
@@ -59,10 +51,17 @@ for (sort <IN>) {
 	$attr = '' unless defined $attr;
 	push @{$cmds{$cat}}, [$name, " $attr "];
 }
-close IN;
 
-for my $out (@categories) {
-	my ($cat) = $out =~ /^cmds-(.*)\.txt$/;
+for my $cat (qw(ancillaryinterrogators
+		ancillarymanipulators
+		mainporcelain
+		plumbinginterrogators
+		plumbingmanipulators
+		synchingrepositories
+		foreignscminterface
+		purehelpers
+		synchelpers)) {
+	my $out = "cmds-$cat.txt";
 	open O, '>', "$out+" or die "Cannot open output file $out+";
 	for (@{$cmds{$cat}}) {
 		format_one(\*O, $_);

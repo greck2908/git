@@ -38,9 +38,8 @@ OPTIONS
 	started.
 
 --reset::
-	Same as -m, except that unmerged entries are discarded instead
-	of failing. When used with `-u`, updates leading to loss of
-	working tree changes will not abort the operation.
+        Same as -m, except that unmerged entries are discarded
+        instead of failing.
 
 -u::
 	After a successful merge, update the files in the work
@@ -82,11 +81,12 @@ OPTIONS
 * when both sides add a path identically.  The resolution
   is to add that path.
 
---prefix=<prefix>::
+--prefix=<prefix>/::
 	Keep the current index contents, and read the contents
 	of the named tree-ish under the directory at `<prefix>`.
 	The command will refuse to overwrite entries that already
-	existed in the original index file.
+	existed in the original index file. Note that the `<prefix>/`
+	value must end with a slash.
 
 --exclude-per-directory=<gitignore>::
 	When running the command with `-u` and `-m` options, the
@@ -116,9 +116,9 @@ OPTIONS
 	located in.
 
 --[no-]recurse-submodules::
-	Using --recurse-submodules will update the content of all active
+	Using --recurse-submodules will update the content of all initialized
 	submodules according to the commit recorded in the superproject by
-	calling read-tree recursively, also setting the submodules' HEAD to be
+	calling read-tree recursively, also setting the submodules HEAD to be
 	detached at that commit.
 
 --no-sparse-checkout::
@@ -129,15 +129,11 @@ OPTIONS
 	Instead of reading tree object(s) into the index, just empty
 	it.
 
--q::
---quiet::
-	Quiet, suppress feedback messages.
-
 <tree-ish#>::
 	The id of the tree object(s) to be read/merged.
 
 
-MERGING
+Merging
 -------
 If `-m` is specified, 'git read-tree' can perform 3 kinds of
 merge, a single tree merge if only 1 tree is given, a
@@ -387,7 +383,7 @@ middle of doing, and when your working tree is ready (i.e. you
 have finished your work-in-progress), attempt the merge again.
 
 
-SPARSE CHECKOUT
+Sparse checkout
 ---------------
 
 "Sparse checkout" allows populating the working directory sparsely.
@@ -436,7 +432,7 @@ support.
 SEE ALSO
 --------
 linkgit:git-write-tree[1]; linkgit:git-ls-files[1];
-linkgit:gitignore[5]; linkgit:git-sparse-checkout[1];
+linkgit:gitignore[5]
 
 GIT
 ---

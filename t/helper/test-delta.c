@@ -8,15 +8,14 @@
  * published by the Free Software Foundation.
  */
 
-#include "test-tool.h"
 #include "git-compat-util.h"
 #include "delta.h"
 #include "cache.h"
 
 static const char usage_str[] =
-	"test-tool delta (-d|-p) <from_file> <data_file> <out_file>";
+	"test-delta (-d|-p) <from_file> <data_file> <out_file>";
 
-int cmd__delta(int argc, const char **argv)
+int cmd_main(int argc, const char **argv)
 {
 	int fd;
 	struct stat st;
@@ -34,8 +33,8 @@ int cmd__delta(int argc, const char **argv)
 		return 1;
 	}
 	from_size = st.st_size;
-	from_buf = xmalloc(from_size);
-	if (read_in_full(fd, from_buf, from_size) < 0) {
+	from_buf = mmap(NULL, from_size, PROT_READ, MAP_PRIVATE, fd, 0);
+	if (from_buf == MAP_FAILED) {
 		perror(argv[2]);
 		close(fd);
 		return 1;
@@ -48,8 +47,8 @@ int cmd__delta(int argc, const char **argv)
 		return 1;
 	}
 	data_size = st.st_size;
-	data_buf = xmalloc(data_size);
-	if (read_in_full(fd, data_buf, data_size) < 0) {
+	data_buf = mmap(NULL, data_size, PROT_READ, MAP_PRIVATE, fd, 0);
+	if (data_buf == MAP_FAILED) {
 		perror(argv[3]);
 		close(fd);
 		return 1;

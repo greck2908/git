@@ -6,7 +6,6 @@
 test_description='fmt-merge-msg test'
 
 . ./test-lib.sh
-. "$TEST_DIRECTORY/lib-gpg.sh"
 
 test_expect_success setup '
 	echo one >one &&
@@ -67,15 +66,16 @@ test_expect_success setup '
 	git commit -a -m "Right #5" &&
 
 	git checkout -b long &&
-	test_commit_bulk --start=0 --message=%s --filename=one 30 &&
+	i=0 &&
+	while test $i -lt 30
+	do
+		test_commit $i one &&
+		i=$(($i+1))
+	done &&
 
 	git show-branch &&
 
 	apos="'\''"
-'
-
-test_expect_success GPG 'set up a signed tag' '
-	git tag -s -m signed-tag-msg signed-good-tag left
 '
 
 test_expect_success 'message for merging local branch' '
@@ -86,24 +86,6 @@ test_expect_success 'message for merging local branch' '
 
 	git fmt-merge-msg <.git/FETCH_HEAD >actual &&
 	test_cmp expected actual
-'
-
-test_expect_success GPG 'message for merging local tag signed by good key' '
-	git checkout master &&
-	git fetch . signed-good-tag &&
-	git fmt-merge-msg <.git/FETCH_HEAD >actual 2>&1 &&
-	grep "^Merge tag ${apos}signed-good-tag${apos}" actual &&
-	grep "^# gpg: Signature made" actual &&
-	grep "^# gpg: Good signature from" actual
-'
-
-test_expect_success GPG 'message for merging local tag signed by unknown key' '
-	git checkout master &&
-	git fetch . signed-good-tag &&
-	GNUPGHOME=. git fmt-merge-msg <.git/FETCH_HEAD >actual 2>&1 &&
-	grep "^Merge tag ${apos}signed-good-tag${apos}" actual &&
-	grep "^# gpg: Signature made" actual &&
-	grep -E "^# gpg: Can${apos}t check signature: (public key not found|No public key)" actual
 '
 
 test_expect_success 'message for merging external branch' '
@@ -384,6 +366,8 @@ test_expect_success 'merge-msg with nothing to merge' '
 	test_unconfig merge.log &&
 	test_config merge.summary yes &&
 
+	>empty &&
+
 	(
 		cd remote &&
 		git checkout -b unrelated &&
@@ -392,7 +376,7 @@ test_expect_success 'merge-msg with nothing to merge' '
 		git fmt-merge-msg <.git/FETCH_HEAD >../actual
 	) &&
 
-	test_must_be_empty actual
+	test_cmp empty actual
 '
 
 test_expect_success 'merge-msg tag' '
@@ -528,7 +512,7 @@ test_expect_success 'merge-msg with "merging" an annotated tag' '
 
 	test_when_finished "git reset --hard" &&
 	annote=$(git rev-parse annote) &&
-	git merge --no-commit --no-ff $annote &&
+	git merge --no-commit $annote &&
 	{
 		cat <<-EOF
 		Merge tag '\''$annote'\''
@@ -540,26 +524,6 @@ test_expect_success 'merge-msg with "merging" an annotated tag' '
 		EOF
 	} >expected &&
 	test_cmp expected .git/MERGE_MSG
-'
-
-test_expect_success 'merge.suppressDest configuration' '
-	git checkout -B side master &&
-	git commit --allow-empty -m "One step ahead" &&
-	git checkout master &&
-	git fetch . side &&
-
-	git -c merge.suppressDest="" fmt-merge-msg <.git/FETCH_HEAD >full.1 &&
-	head -n1 full.1 >actual &&
-	grep -e "Merge branch .side. into master" actual &&
-
-	git -c merge.suppressDest="mast" fmt-merge-msg <.git/FETCH_HEAD >full.2 &&
-	head -n1 full.2 >actual &&
-	grep -e "Merge branch .side. into master$" actual &&
-
-	git -c merge.suppressDest="ma?*[rn]" fmt-merge-msg <.git/FETCH_HEAD >full.3 &&
-	head -n1 full.3 >actual &&
-	grep -e "Merge branch .side." actual &&
-	! grep -e " into master$" actual
 '
 
 test_done

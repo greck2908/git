@@ -69,20 +69,20 @@ test_expect_success 'setup: messages' '
 
 	EOF
 
-	cat >msg-without-scissors-line <<-\EOF &&
-	Test that git-am --scissors cuts at the scissors line
+	cat >scissors-msg <<-\EOF &&
+	Test git-am with scissors line
 
 	This line should be included in the commit message.
 	EOF
 
-	printf "Subject: " >subject-prefix &&
-
-	cat - subject-prefix msg-without-scissors-line >msg-with-scissors-line <<-\EOF
+	cat - scissors-msg >no-scissors-msg <<-\EOF &&
 	This line should not be included in the commit message with --scissors enabled.
 
 	 - - >8 - - remove everything above this line - - >8 - -
 
 	EOF
+
+	signoff="Signed-off-by: $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL>"
 '
 
 test_expect_success setup '
@@ -140,25 +140,26 @@ test_expect_success setup '
 		echo "# User $GIT_AUTHOR_NAME <$GIT_AUTHOR_EMAIL>" &&
 		echo "# Date $test_tick 25200" &&
 		echo "#      $(git show --pretty="%aD" -s second)" &&
-		echo "# Node ID $ZERO_OID" &&
-		echo "# Parent  $ZERO_OID" &&
+		echo "# Node ID $_z40" &&
+		echo "# Parent  $_z40" &&
 		cat msg &&
 		echo &&
 		git diff-tree --no-commit-id -p second
 	} >patch1-hg.eml &&
 
 
-	echo file >file &&
-	git add file &&
-	git commit -F msg-without-scissors-line &&
-	git tag expected-for-scissors &&
+	echo scissors-file >scissors-file &&
+	git add scissors-file &&
+	git commit -F scissors-msg &&
+	git tag scissors &&
+	git format-patch --stdout scissors^ >scissors-patch.eml &&
 	git reset --hard HEAD^ &&
 
-	echo file >file &&
-	git add file &&
-	git commit -F msg-with-scissors-line &&
-	git tag expected-for-no-scissors &&
-	git format-patch --stdout expected-for-no-scissors^ >patch-with-scissors-line.eml &&
+	echo no-scissors-file >no-scissors-file &&
+	git add no-scissors-file &&
+	git commit -F no-scissors-msg &&
+	git tag no-scissors &&
+	git format-patch --stdout no-scissors^ >no-scissors-patch.eml &&
 	git reset --hard HEAD^ &&
 
 	sed -n -e "3,\$p" msg >file &&
@@ -166,7 +167,7 @@ test_expect_success setup '
 	test_tick &&
 	git commit -m third &&
 
-	git format-patch --stdout first >patch2 &&
+	git format-patch --stdout first >patch2	&&
 
 	git checkout -b lorem &&
 	sed -n -e "11,\$p" msg >file &&
@@ -415,10 +416,10 @@ test_expect_success 'am --scissors cuts the message at the scissors line' '
 	rm -fr .git/rebase-apply &&
 	git reset --hard &&
 	git checkout second &&
-	git am --scissors patch-with-scissors-line.eml &&
+	git am --scissors scissors-patch.eml &&
 	test_path_is_missing .git/rebase-apply &&
-	git diff --exit-code expected-for-scissors &&
-	test_cmp_rev expected-for-scissors HEAD
+	git diff --exit-code scissors &&
+	test_cmp_rev scissors HEAD
 '
 
 test_expect_success 'am --no-scissors overrides mailinfo.scissors' '
@@ -426,10 +427,10 @@ test_expect_success 'am --no-scissors overrides mailinfo.scissors' '
 	git reset --hard &&
 	git checkout second &&
 	test_config mailinfo.scissors true &&
-	git am --no-scissors patch-with-scissors-line.eml &&
+	git am --no-scissors no-scissors-patch.eml &&
 	test_path_is_missing .git/rebase-apply &&
-	git diff --exit-code expected-for-no-scissors &&
-	test_cmp_rev expected-for-no-scissors HEAD
+	git diff --exit-code no-scissors &&
+	test_cmp_rev no-scissors HEAD
 '
 
 test_expect_success 'setup: new author and committer' '
@@ -465,7 +466,7 @@ test_expect_success 'am changes committer and keeps author' '
 test_expect_success 'am --signoff adds Signed-off-by: line' '
 	rm -fr .git/rebase-apply &&
 	git reset --hard &&
-	git checkout -b topic_2 first &&
+	git checkout -b master2 first &&
 	git am --signoff <patch2 &&
 	{
 		printf "third\n\nSigned-off-by: %s <%s>\n\n" \
@@ -479,7 +480,7 @@ test_expect_success 'am --signoff adds Signed-off-by: line' '
 '
 
 test_expect_success 'am stays in branch' '
-	echo refs/heads/topic_2 >expected &&
+	echo refs/heads/master2 >expected &&
 	git symbolic-ref HEAD >actual &&
 	test_cmp expected actual
 '
@@ -540,7 +541,7 @@ test_expect_success 'am without --keep removes Re: and [PATCH] stuff' '
 	git reset --hard HEAD^ &&
 	git am <patch4 &&
 	git rev-parse HEAD >expected &&
-	git rev-parse topic_2 >actual &&
+	git rev-parse master2 >actual &&
 	test_cmp expected actual
 '
 
@@ -567,7 +568,7 @@ test_expect_success 'am --keep-non-patch really keeps the non-patch part' '
 test_expect_success 'setup am -3' '
 	rm -fr .git/rebase-apply &&
 	git reset --hard &&
-	git checkout -b base3way topic_2 &&
+	git checkout -b base3way master2 &&
 	sed -n -e "3,\$p" msg >file &&
 	head -n 9 msg >>file &&
 	git add file &&
@@ -650,7 +651,7 @@ test_expect_success 'am -3 -q is quiet' '
 	git checkout -f lorem2 &&
 	git reset base3way --hard &&
 	git am -3 -q lorem-move.patch >output.out 2>&1 &&
-	test_must_be_empty output.out
+	! test -s output.out
 '
 
 test_expect_success 'am pauses on conflict' '
@@ -659,31 +660,6 @@ test_expect_success 'am pauses on conflict' '
 	git checkout lorem2^^ &&
 	test_must_fail git am lorem-move.patch &&
 	test -d .git/rebase-apply
-'
-
-test_expect_success 'am --show-current-patch' '
-	git am --show-current-patch >actual.patch &&
-	test_cmp .git/rebase-apply/0001 actual.patch
-'
-
-test_expect_success 'am --show-current-patch=raw' '
-	git am --show-current-patch=raw >actual.patch &&
-	test_cmp .git/rebase-apply/0001 actual.patch
-'
-
-test_expect_success 'am --show-current-patch=diff' '
-	git am --show-current-patch=diff >actual.patch &&
-	test_cmp .git/rebase-apply/patch actual.patch
-'
-
-test_expect_success 'am accepts repeated --show-current-patch' '
-	git am --show-current-patch --show-current-patch=raw >actual.patch &&
-	test_cmp .git/rebase-apply/0001 actual.patch
-'
-
-test_expect_success 'am detects incompatible --show-current-patch' '
-	test_must_fail git am --show-current-patch=raw --show-current-patch=diff &&
-	test_must_fail git am --show-current-patch --show-current-patch=diff
 '
 
 test_expect_success 'am --skip works' '
@@ -893,7 +869,7 @@ test_expect_success 'am -q is quiet' '
 	git checkout first &&
 	test_tick &&
 	git am -q <patch1 >output.out 2>&1 &&
-	test_must_be_empty output.out
+	! test -s output.out
 '
 
 test_expect_success 'am empty-file does not infloop' '
@@ -989,7 +965,7 @@ test_expect_success 'am -s unexpected trailer block' '
 	Signed-off-by: J C H <j@c.h>
 	EOF
 	git commit -F msg &&
-	git cat-file commit HEAD | sed -e "1,/^$/d" >original &&
+	git cat-file commit HEAD | sed -e '1,/^$/d' >original &&
 	git format-patch --stdout -1 >patch &&
 
 	git reset --hard HEAD^ &&
@@ -998,7 +974,7 @@ test_expect_success 'am -s unexpected trailer block' '
 		cat original &&
 		echo "Signed-off-by: $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL>"
 	) >expect &&
-	git cat-file commit HEAD | sed -e "1,/^$/d" >actual &&
+	git cat-file commit HEAD | sed -e '1,/^$/d' >actual &&
 	test_cmp expect actual &&
 
 	cat >msg <<-\EOF &&
@@ -1009,7 +985,7 @@ test_expect_success 'am -s unexpected trailer block' '
 	EOF
 	git reset HEAD^ &&
 	git commit -F msg file &&
-	git cat-file commit HEAD | sed -e "1,/^$/d" >original &&
+	git cat-file commit HEAD | sed -e '1,/^$/d' >original &&
 	git format-patch --stdout -1 >patch &&
 
 	git reset --hard HEAD^ &&
@@ -1020,7 +996,7 @@ test_expect_success 'am -s unexpected trailer block' '
 		echo &&
 		echo "Signed-off-by: $GIT_COMMITTER_NAME <$GIT_COMMITTER_EMAIL>"
 	) >expect &&
-	git cat-file commit HEAD | sed -e "1,/^$/d" >actual &&
+	git cat-file commit HEAD | sed -e '1,/^$/d' >actual &&
 	test_cmp expect actual
 '
 
@@ -1067,86 +1043,6 @@ test_expect_success 'am works with multi-line in-body headers' '
 	# Ensure that the author and full message are present
 	git cat-file commit HEAD | grep "^author.*long@example.com" &&
 	git cat-file commit HEAD | grep "^$LONG$"
-'
-
-test_expect_success 'am --quit keeps HEAD where it is' '
-	mkdir .git/rebase-apply &&
-	>.git/rebase-apply/last &&
-	>.git/rebase-apply/next &&
-	git rev-parse HEAD^ >.git/ORIG_HEAD &&
-	git rev-parse HEAD >expected &&
-	git am --quit &&
-	test_path_is_missing .git/rebase-apply &&
-	git rev-parse HEAD >actual &&
-	test_cmp expected actual
-'
-
-test_expect_success 'am and .gitattibutes' '
-	test_create_repo attributes &&
-	(
-		cd attributes &&
-		test_commit init &&
-		git config filter.test.clean "sed -e '\''s/smudged/clean/g'\''" &&
-		git config filter.test.smudge "sed -e '\''s/clean/smudged/g'\''" &&
-
-		test_commit second &&
-		git checkout -b test HEAD^ &&
-
-		echo "*.txt filter=test conflict-marker-size=10" >.gitattributes &&
-		git add .gitattributes &&
-		test_commit third &&
-
-		echo "This text is smudged." >a.txt &&
-		git add a.txt &&
-		test_commit fourth &&
-
-		git checkout -b removal HEAD^ &&
-		git rm .gitattributes &&
-		git add -u &&
-		test_commit fifth &&
-		git cherry-pick test &&
-
-		git checkout -b conflict third &&
-		echo "This text is different." >a.txt &&
-		git add a.txt &&
-		test_commit sixth &&
-
-		git checkout test &&
-		git format-patch --stdout master..HEAD >patches &&
-		git reset --hard master &&
-		git am patches &&
-		grep "smudged" a.txt &&
-
-		git checkout removal &&
-		git reset --hard &&
-		git format-patch --stdout master..HEAD >patches &&
-		git reset --hard master &&
-		git am patches &&
-		grep "clean" a.txt &&
-
-		git checkout conflict &&
-		git reset --hard &&
-		git format-patch --stdout master..HEAD >patches &&
-		git reset --hard fourth &&
-		test_must_fail git am -3 patches &&
-		grep "<<<<<<<<<<" a.txt
-	)
-'
-
-test_expect_success 'apply binary blob in partial clone' '
-	printf "\\000" >binary &&
-	git add binary &&
-	git commit -m "binary blob" &&
-	git format-patch --stdout -m HEAD^ >patch &&
-
-	test_create_repo server &&
-	test_config -C server uploadpack.allowfilter 1 &&
-	test_config -C server uploadpack.allowanysha1inwant 1 &&
-	git clone --filter=blob:none "file://$(pwd)/server" client &&
-	test_when_finished "rm -rf client" &&
-
-	# Exercise to make sure that it works
-	git -C client am ../patch
 '
 
 test_done

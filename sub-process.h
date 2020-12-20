@@ -24,7 +24,7 @@
 
 /* Members should not be accessed directly. */
 struct subprocess_entry {
-	struct hashmap_entry ent;
+	struct hashmap_entry ent; /* must be the first member! */
 	const char *cmd;
 	struct child_process process;
 };
@@ -42,10 +42,10 @@ struct subprocess_capability {
 /* subprocess functions */
 
 /* Function to test two subprocess hashmap entries for equality. */
-int cmd2process_cmp(const void *unused_cmp_data,
-		    const struct hashmap_entry *e,
-		    const struct hashmap_entry *entry_or_key,
-		    const void *unused_keydata);
+extern int cmd2process_cmp(const void *unused_cmp_data,
+			   const void *e1,
+			   const void *e2,
+			   const void *unused_keydata);
 
 /*
  * User-supplied function to initialize the sub-process.  This is
@@ -73,8 +73,8 @@ static inline struct child_process *subprocess_get_child_process(
 }
 
 /*
- * Perform the version and capability negotiation as described in the
- * "Handshake" section of long-running-process-protocol.txt using the
+ * Perform the version and capability negotiation as described in the "Long
+ * Running Filter Process" section of the gitattributes documentation using the
  * given requested versions and capabilities. The "versions" and "capabilities"
  * parameters are arrays terminated by a 0 or blank struct.
  *

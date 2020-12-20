@@ -25,15 +25,6 @@ test_expect_success "setup" '
 	EOF
 '
 
-# make sure to exercise these code paths, the output is a bit tricky
-# to verify
-test_expect_success 'basic help commands' '
-	git help >/dev/null &&
-	git help -a --no-verbose >/dev/null &&
-	git help -g >/dev/null &&
-	git help -a >/dev/null
-'
-
 test_expect_success "works for commands and guides by default" '
 	configure_help &&
 	git help status &&
@@ -58,23 +49,8 @@ test_expect_success "--help does not work for guides" "
 	test_i18ncmp expect actual
 "
 
-test_expect_success 'git help' '
-	git help >help.output &&
-	test_i18ngrep "^   clone  " help.output &&
-	test_i18ngrep "^   add    " help.output &&
-	test_i18ngrep "^   log    " help.output &&
-	test_i18ngrep "^   commit " help.output &&
-	test_i18ngrep "^   fetch  " help.output
-'
-test_expect_success 'git help -g' '
-	git help -g >help.output &&
-	test_i18ngrep "^   attributes " help.output &&
-	test_i18ngrep "^   everyday   " help.output &&
-	test_i18ngrep "^   tutorial   " help.output
-'
-
 test_expect_success 'generate builtin list' '
-	git --list-cmds=builtins >builtins
+	git --list-builtins >builtins
 '
 
 while read builtin

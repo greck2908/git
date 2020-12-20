@@ -1,14 +1,12 @@
 #ifndef SPLIT_INDEX_H
 #define SPLIT_INDEX_H
 
-#include "cache.h"
-
 struct index_state;
 struct strbuf;
 struct ewah_bitmap;
 
 struct split_index {
-	struct object_id base_oid;
+	unsigned char base_sha1[20];
 	struct index_state *base;
 	struct ewah_bitmap *delete_bitmap;
 	struct ewah_bitmap *replace_bitmap;
@@ -23,7 +21,7 @@ struct split_index *init_split_index(struct index_state *istate);
 void save_or_free_index_entry(struct index_state *istate, struct cache_entry *ce);
 void replace_index_entry_in_base(struct index_state *istate,
 				 struct cache_entry *old,
-				 struct cache_entry *new_entry);
+				 struct cache_entry *new);
 int read_link_extension(struct index_state *istate,
 			const void *data, unsigned long sz);
 int write_link_extension(struct strbuf *sb,

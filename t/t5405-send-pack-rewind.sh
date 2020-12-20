@@ -25,7 +25,8 @@ test_expect_success 'non forced push should die not segfault' '
 
 	(
 		cd another &&
-		test_must_fail git push .. master:master
+		git push .. master:master
+		test $? = 1
 	)
 
 '

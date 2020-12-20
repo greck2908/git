@@ -5,7 +5,6 @@ enum protocol_version {
 	protocol_unknown_version = -1,
 	protocol_v0 = 0,
 	protocol_v1 = 1,
-	protocol_v2 = 2,
 };
 
 /*
@@ -14,7 +13,7 @@ enum protocol_version {
  * 'protocol.version' config.  If unconfigured, a value of 'protocol_v0' is
  * returned.
  */
-enum protocol_version get_protocol_version_config(void);
+extern enum protocol_version get_protocol_version_config(void);
 
 /*
  * Used by a server to determine which protocol version should be used based on
@@ -23,12 +22,12 @@ enum protocol_version get_protocol_version_config(void);
  * request a particular protocol version, a default of 'protocol_v0' will be
  * used.
  */
-enum protocol_version determine_protocol_version_server(void);
+extern enum protocol_version determine_protocol_version_server(void);
 
 /*
  * Used by a client to determine which protocol version the server is speaking
  * based on the server's initial response.
  */
-enum protocol_version determine_protocol_version_client(const char *server_response);
+extern enum protocol_version determine_protocol_version_client(const char *server_response);
 
 #endif /* PROTOCOL_H */

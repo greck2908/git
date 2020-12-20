@@ -48,16 +48,16 @@ struct spanhash_top {
 
 static struct spanhash_top *spanhash_rehash(struct spanhash_top *orig)
 {
-	struct spanhash_top *new_spanhash;
+	struct spanhash_top *new;
 	int i;
 	int osz = 1 << orig->alloc_log2;
 	int sz = osz << 1;
 
-	new_spanhash = xmalloc(st_add(sizeof(*orig),
+	new = xmalloc(st_add(sizeof(*orig),
 			     st_mult(sizeof(struct spanhash), sz)));
-	new_spanhash->alloc_log2 = orig->alloc_log2 + 1;
-	new_spanhash->free = INITIAL_FREE(new_spanhash->alloc_log2);
-	memset(new_spanhash->data, 0, sizeof(struct spanhash) * sz);
+	new->alloc_log2 = orig->alloc_log2 + 1;
+	new->free = INITIAL_FREE(new->alloc_log2);
+	memset(new->data, 0, sizeof(struct spanhash) * sz);
 	for (i = 0; i < osz; i++) {
 		struct spanhash *o = &(orig->data[i]);
 		int bucket;
@@ -65,11 +65,11 @@ static struct spanhash_top *spanhash_rehash(struct spanhash_top *orig)
 			continue;
 		bucket = o->hashval & (sz - 1);
 		while (1) {
-			struct spanhash *h = &(new_spanhash->data[bucket++]);
+			struct spanhash *h = &(new->data[bucket++]);
 			if (!h->cnt) {
 				h->hashval = o->hashval;
 				h->cnt = o->cnt;
-				new_spanhash->free--;
+				new->free--;
 				break;
 			}
 			if (sz <= bucket)
@@ -77,7 +77,7 @@ static struct spanhash_top *spanhash_rehash(struct spanhash_top *orig)
 		}
 	}
 	free(orig);
-	return new_spanhash;
+	return new;
 }
 
 static struct spanhash_top *add_spanhash(struct spanhash_top *top,
@@ -121,15 +121,14 @@ static int spanhash_cmp(const void *a_, const void *b_)
 		a->hashval > b->hashval ? 1 : 0;
 }
 
-static struct spanhash_top *hash_chars(struct repository *r,
-				       struct diff_filespec *one)
+static struct spanhash_top *hash_chars(struct diff_filespec *one)
 {
 	int i, n;
 	unsigned int accum1, accum2, hashval;
 	struct spanhash_top *hash;
 	unsigned char *buf = one->data;
 	unsigned int sz = one->size;
-	int is_text = !diff_filespec_is_binary(r, one);
+	int is_text = !diff_filespec_is_binary(one);
 
 	i = INITIAL_HASH_SIZE;
 	hash = xmalloc(st_add(sizeof(*hash),
@@ -163,8 +162,7 @@ static struct spanhash_top *hash_chars(struct repository *r,
 	return hash;
 }
 
-int diffcore_count_changes(struct repository *r,
-			   struct diff_filespec *src,
+int diffcore_count_changes(struct diff_filespec *src,
 			   struct diff_filespec *dst,
 			   void **src_count_p,
 			   void **dst_count_p,
@@ -179,14 +177,14 @@ int diffcore_count_changes(struct repository *r,
 	if (src_count_p)
 		src_count = *src_count_p;
 	if (!src_count) {
-		src_count = hash_chars(r, src);
+		src_count = hash_chars(src);
 		if (src_count_p)
 			*src_count_p = src_count;
 	}
 	if (dst_count_p)
 		dst_count = *dst_count_p;
 	if (!dst_count) {
-		dst_count = hash_chars(r, dst);
+		dst_count = hash_chars(dst);
 		if (dst_count_p)
 			*dst_count_p = dst_count;
 	}

@@ -3,14 +3,12 @@
 #include "config.h"
 #include "branch.h"
 #include "refs.h"
-#include "refspec.h"
 #include "remote.h"
-#include "sequencer.h"
 #include "commit.h"
 #include "worktree.h"
 
 struct tracking {
-	struct refspec_item spec;
+	struct refspec spec;
 	char *src;
 	const char *remote;
 	int matches;
@@ -26,7 +24,9 @@ static int find_tracked_branch(struct remote *remote, void *priv)
 			tracking->remote = remote->name;
 		} else {
 			free(tracking->spec.src);
-			FREE_AND_NULL(tracking->src);
+			if (tracking->src) {
+				FREE_AND_NULL(tracking->src);
+			}
 		}
 		tracking->spec.src = NULL;
 	}
@@ -218,8 +218,8 @@ int validate_new_branchname(const char *name, struct strbuf *ref, int force)
 static int check_tracking_branch(struct remote *remote, void *cb_data)
 {
 	char *tracking_branch = cb_data;
-	struct refspec_item query;
-	memset(&query, 0, sizeof(struct refspec_item));
+	struct refspec query;
+	memset(&query, 0, sizeof(struct refspec));
 	query.dst = tracking_branch;
 	return !remote_find_tracking(remote, &query);
 }
@@ -243,8 +243,7 @@ N_("\n"
 "will track its remote counterpart, you may want to use\n"
 "\"git push -u\" to set the upstream config as you push.");
 
-void create_branch(struct repository *r,
-		   const char *name, const char *start_name,
+void create_branch(const char *name, const char *start_name,
 		   int force, int clobber_head_ok, int reflog,
 		   int quiet, enum branch_track track)
 {
@@ -269,7 +268,7 @@ void create_branch(struct repository *r,
 	}
 
 	real_ref = NULL;
-	if (get_oid_mb(start_name, &oid)) {
+	if (get_oid(start_name, &oid)) {
 		if (explicit_tracking) {
 			if (advice_set_upstream_failure) {
 				error(_(upstream_missing), start_name);
@@ -281,7 +280,7 @@ void create_branch(struct repository *r,
 		die(_("Not a valid object name: '%s'."), start_name);
 	}
 
-	switch (dwim_ref(start_name, strlen(start_name), &oid, &real_ref, 0)) {
+	switch (dwim_ref(start_name, strlen(start_name), &oid, &real_ref)) {
 	case 0:
 		/* Not branching from any existing branch */
 		if (explicit_tracking)
@@ -302,7 +301,7 @@ void create_branch(struct repository *r,
 		break;
 	}
 
-	if ((commit = lookup_commit_reference(r, &oid)) == NULL)
+	if ((commit = lookup_commit_reference(&oid)) == NULL)
 		die(_("Not a valid branch point: '%s'."), start_name);
 	oidcpy(&oid, &commit->object.oid);
 
@@ -338,20 +337,15 @@ void create_branch(struct repository *r,
 	free(real_ref);
 }
 
-void remove_merge_branch_state(struct repository *r)
+void remove_branch_state(void)
 {
-	unlink(git_path_merge_head(r));
-	unlink(git_path_merge_rr(r));
-	unlink(git_path_merge_msg(r));
-	unlink(git_path_merge_mode(r));
-	save_autostash(git_path_merge_autostash(r));
-}
-
-void remove_branch_state(struct repository *r, int verbose)
-{
-	sequencer_post_commit_cleanup(r, verbose);
-	unlink(git_path_squash_msg(r));
-	remove_merge_branch_state(r);
+	unlink(git_path_cherry_pick_head());
+	unlink(git_path_revert_head());
+	unlink(git_path_merge_head());
+	unlink(git_path_merge_rr());
+	unlink(git_path_merge_msg());
+	unlink(git_path_merge_mode());
+	unlink(git_path_squash_msg());
 }
 
 void die_if_checked_out(const char *branch, int ignore_current_worktree)
@@ -370,7 +364,7 @@ int replace_each_worktree_head_symref(const char *oldref, const char *newref,
 				      const char *logmsg)
 {
 	int ret = 0;
-	struct worktree **worktrees = get_worktrees();
+	struct worktree **worktrees = get_worktrees(0);
 	int i;
 
 	for (i = 0; worktrees[i]; i++) {

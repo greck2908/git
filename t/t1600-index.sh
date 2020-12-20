@@ -41,7 +41,8 @@ test_expect_success 'no warning with bogus GIT_INDEX_VERSION and existing index'
 		GIT_INDEX_VERSION=1 &&
 		export GIT_INDEX_VERSION &&
 		git add a 2>actual.err &&
-		test_must_be_empty actual.err
+		>expect.err &&
+		test_i18ncmp expect.err actual.err
 	)
 '
 
@@ -59,42 +60,17 @@ test_expect_success 'out of bounds index.version issues warning' '
 	)
 '
 
-test_index_version () {
-	INDEX_VERSION_CONFIG=$1 &&
-	FEATURE_MANY_FILES=$2 &&
-	ENV_VAR_VERSION=$3
-	EXPECTED_OUTPUT_VERSION=$4 &&
+test_expect_success 'GIT_INDEX_VERSION takes precedence over config' '
 	(
 		rm -f .git/index &&
-		rm -f .git/config &&
-		if test "$INDEX_VERSION_CONFIG" -ne 0
-		then
-			git config --add index.version $INDEX_VERSION_CONFIG
-		fi &&
-		git config --add feature.manyFiles $FEATURE_MANY_FILES
-		if test "$ENV_VAR_VERSION" -ne 0
-		then
-			GIT_INDEX_VERSION=$ENV_VAR_VERSION &&
-			export GIT_INDEX_VERSION
-		else
-			unset GIT_INDEX_VERSION
-		fi &&
+		GIT_INDEX_VERSION=4 &&
+		export GIT_INDEX_VERSION &&
+		git config --add index.version 2 &&
 		git add a 2>&1 &&
-		echo $EXPECTED_OUTPUT_VERSION >expect &&
-		test-tool index-version <.git/index >actual &&
+		echo 4 >expect &&
+		test-index-version <.git/index >actual &&
 		test_cmp expect actual
 	)
-}
-
-test_expect_success 'index version config precedence' '
-	test_index_version 0 false 0 2 &&
-	test_index_version 2 false 0 2 &&
-	test_index_version 3 false 0 2 &&
-	test_index_version 4 false 0 4 &&
-	test_index_version 2 false 4 4 &&
-	test_index_version 2 true 0 2 &&
-	test_index_version 0 true 0 4 &&
-	test_index_version 0 true 2 2
 '
 
 test_done

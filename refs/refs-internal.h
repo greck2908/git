@@ -1,12 +1,6 @@
 #ifndef REFS_REFS_INTERNAL_H
 #define REFS_REFS_INTERNAL_H
 
-#include "cache.h"
-#include "refs.h"
-#include "iterator.h"
-
-struct ref_transaction;
-
 /*
  * Data structures and functions for the internal use of the refs
  * module. Code outside of the refs module should use only the public
@@ -30,13 +24,6 @@ struct ref_transaction;
  * it agrees with old_oid.
  */
 #define REF_HAVE_OLD (1 << 3)
-
-/*
- * Used as a flag in ref_update::flags when we want to log a ref
- * update but not actually perform it.  This is used when a symbolic
- * ref update is split up.
- */
-#define REF_LOG_ONLY (1 << 7)
 
 /*
  * Return the length of time to retry acquiring a loose reference lock
@@ -102,6 +89,13 @@ enum peel_status {
  * and leave oid unchanged.
  */
 enum peel_status peel_object(const struct object_id *name, struct object_id *oid);
+
+/*
+ * Copy the reflog message msg to buf, which has been allocated sufficiently
+ * large, while cleaning up the whitespaces.  Especially, convert LF to space,
+ * because reflog file is one line per entry.
+ */
+int copy_reflog_msg(char *buf, const char *msg);
 
 /**
  * Information needed for a single ref update. Set new_oid to the new
@@ -263,7 +257,7 @@ int refs_rename_ref_available(struct ref_store *refs,
  * after calling ref_iterator_advance() again or calling
  * ref_iterator_abort(), you must make a copy. When the iteration has
  * been exhausted, ref_iterator_advance() releases any resources
- * associated with the iteration, frees the ref_iterator object, and
+ * assocated with the iteration, frees the ref_iterator object, and
  * returns ITER_DONE. If you want to abort the iteration early, call
  * ref_iterator_abort(), which also frees the ref_iterator object and
  * any associated resources. If there was an internal error advancing
@@ -287,7 +281,7 @@ int refs_rename_ref_available(struct ref_store *refs,
  *
  *             // Access information about the current reference:
  *             if (!(iter->flags & REF_ISSYMREF))
- *                     printf("%s is %s\n", iter->refname, oid_to_hex(iter->oid));
+ *                     printf("%s is %s\n", iter->refname, oid_to_hex(&iter->oid));
  *
  *             // If you need to peel the reference:
  *             ref_iterator_peel(iter, &oid);
@@ -348,13 +342,9 @@ int is_empty_ref_iterator(struct ref_iterator *ref_iterator);
 /*
  * Return an iterator that goes over each reference in `refs` for
  * which the refname begins with prefix. If trim is non-zero, then
- * trim that many characters off the beginning of each refname.
- * The output is ordered by refname. The following flags are supported:
- *
- * DO_FOR_EACH_INCLUDE_BROKEN: include broken references in
- *         the iteration.
- *
- * DO_FOR_EACH_PER_WORKTREE_ONLY: only produce REF_TYPE_PER_WORKTREE refs.
+ * trim that many characters off the beginning of each refname. flags
+ * can be DO_FOR_EACH_INCLUDE_BROKEN to include broken references in
+ * the iteration. The output is ordered by refname.
  */
 struct ref_iterator *refs_ref_iterator_begin(
 		struct ref_store *refs,
@@ -443,14 +433,6 @@ void base_ref_iterator_free(struct ref_iterator *iter);
 
 /* Virtual function declarations for ref_iterators: */
 
-/*
- * backend-specific implementation of ref_iterator_advance. For symrefs, the
- * function should set REF_ISSYMREF, and it should also dereference the symref
- * to provide the OID referent. If DO_FOR_EACH_INCLUDE_BROKEN is set, symrefs
- * with non-existent referents and refs pointing to non-existent object names
- * should also be returned. If DO_FOR_EACH_PER_WORKTREE_ONLY, only
- * REF_TYPE_PER_WORKTREE refs should be returned.
- */
 typedef int ref_iterator_advance_fn(struct ref_iterator *ref_iterator);
 
 typedef int ref_iterator_peel_fn(struct ref_iterator *ref_iterator,
@@ -491,9 +473,8 @@ extern struct ref_iterator *current_ref_iter;
  * adapter between the callback style of reference iteration and the
  * iterator style.
  */
-int do_for_each_repo_ref_iterator(struct repository *r,
-				  struct ref_iterator *iter,
-				  each_repo_ref_fn fn, void *cb_data);
+int do_for_each_ref_iterator(struct ref_iterator *iter,
+			     each_ref_fn fn, void *cb_data);
 
 /*
  * Only include per-worktree refs in a do_for_each_ref*() iteration.
@@ -674,21 +655,12 @@ extern struct ref_storage_be refs_be_packed;
 /*
  * A representation of the reference store for the main repository or
  * a submodule. The ref_store instances for submodules are kept in a
- * hash map; see get_submodule_ref_store() for more info.
+ * linked list.
  */
 struct ref_store {
 	/* The backend describing this ref_store's storage scheme: */
 	const struct ref_storage_be *be;
-
-	/* The gitdir that this ref_store applies to: */
-	char *gitdir;
 };
-
-/*
- * Parse contents of a loose ref file.
- */
-int parse_loose_ref_contents(const char *buf, struct object_id *oid,
-			     struct strbuf *referent, unsigned int *type);
 
 /*
  * Fill in the generic part of refs and add it to our collection of
@@ -696,10 +668,5 @@ int parse_loose_ref_contents(const char *buf, struct object_id *oid,
  */
 void base_ref_store_init(struct ref_store *refs,
 			 const struct ref_storage_be *be);
-
-/*
- * Support GIT_TRACE_REFS by optionally wrapping the given ref_store instance.
- */
-struct ref_store *maybe_debug_wrap_ref_store(const char *gitdir, struct ref_store *store);
 
 #endif /* REFS_REFS_INTERNAL_H */

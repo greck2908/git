@@ -5,11 +5,6 @@ test_description='git log'
 . ./test-lib.sh
 . "$TEST_DIRECTORY/lib-gpg.sh"
 . "$TEST_DIRECTORY/lib-terminal.sh"
-. "$TEST_DIRECTORY/lib-log-graph.sh"
-
-test_cmp_graph () {
-	lib_test_cmp_graph --format=%s "$@"
-}
 
 test_expect_success setup '
 
@@ -92,12 +87,12 @@ test_expect_success 'format %w(,1,2)' '
 '
 
 cat > expect << EOF
-$(git rev-parse --short :/sixth  ) sixth
-$(git rev-parse --short :/fifth  ) fifth
-$(git rev-parse --short :/fourth ) fourth
-$(git rev-parse --short :/third  ) third
-$(git rev-parse --short :/second ) second
-$(git rev-parse --short :/initial) initial
+804a787 sixth
+394ef78 fifth
+5d31159 fourth
+2fbe8c0 third
+f7dab8e second
+3a2fdcb initial
 EOF
 test_expect_success 'oneline' '
 
@@ -178,45 +173,43 @@ test_expect_success 'git config log.follow is overridden by --no-follow' '
 	verbose test "$actual" = "$expect"
 '
 
-# Note that these commits are intentionally listed out of order.
-last_three="$(git rev-parse :/fourth :/sixth :/fifth)"
 cat > expect << EOF
-$(git rev-parse --short :/sixth ) sixth
-$(git rev-parse --short :/fifth ) fifth
-$(git rev-parse --short :/fourth) fourth
+804a787 sixth
+394ef78 fifth
+5d31159 fourth
 EOF
 test_expect_success 'git log --no-walk <commits> sorts by commit time' '
-	git log --no-walk --oneline $last_three > actual &&
+	git log --no-walk --oneline 5d31159 804a787 394ef78 > actual &&
 	test_cmp expect actual
 '
 
 test_expect_success 'git log --no-walk=sorted <commits> sorts by commit time' '
-	git log --no-walk=sorted --oneline $last_three > actual &&
+	git log --no-walk=sorted --oneline 5d31159 804a787 394ef78 > actual &&
 	test_cmp expect actual
 '
 
 cat > expect << EOF
-=== $(git rev-parse --short :/sixth ) sixth
-=== $(git rev-parse --short :/fifth ) fifth
-=== $(git rev-parse --short :/fourth) fourth
+=== 804a787 sixth
+=== 394ef78 fifth
+=== 5d31159 fourth
 EOF
 test_expect_success 'git log --line-prefix="=== " --no-walk <commits> sorts by commit time' '
-	git log --line-prefix="=== " --no-walk --oneline $last_three > actual &&
+	git log --line-prefix="=== " --no-walk --oneline 5d31159 804a787 394ef78 > actual &&
 	test_cmp expect actual
 '
 
 cat > expect << EOF
-$(git rev-parse --short :/fourth) fourth
-$(git rev-parse --short :/sixth ) sixth
-$(git rev-parse --short :/fifth ) fifth
+5d31159 fourth
+804a787 sixth
+394ef78 fifth
 EOF
 test_expect_success 'git log --no-walk=unsorted <commits> leaves list of commits as given' '
-	git log --no-walk=unsorted --oneline $last_three > actual &&
+	git log --no-walk=unsorted --oneline 5d31159 804a787 394ef78 > actual &&
 	test_cmp expect actual
 '
 
 test_expect_success 'git show <commits> leaves list of commits as given' '
-	git show --oneline -s $last_three > actual &&
+	git show --oneline -s 5d31159 804a787 394ef78 > actual &&
 	test_cmp expect actual
 '
 
@@ -347,9 +340,10 @@ test_expect_success PCRE 'log -F -E --perl-regexp --grep=<pcre> uses PCRE' '
 '
 
 test_expect_success 'log with grep.patternType configuration' '
+	>expect &&
 	git -c grep.patterntype=fixed \
 	log -1 --pretty=tformat:%s --grep=s.c.nd >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 '
 
 test_expect_success 'log with grep.patternType configuration and command line' '
@@ -359,7 +353,7 @@ test_expect_success 'log with grep.patternType configuration and command line' '
 	test_cmp expect actual
 '
 
-test_expect_success !FAIL_PREREQS 'log with various grep.patternType configurations & command-lines' '
+test_expect_success 'log with various grep.patternType configurations & command-lines' '
 	git init pattern-type &&
 	(
 		cd pattern-type &&
@@ -457,7 +451,8 @@ cat > expect <<EOF
 EOF
 
 test_expect_success 'simple log --graph' '
-	test_cmp_graph
+	git log --graph --pretty=tformat:%s >actual &&
+	test_cmp expect actual
 '
 
 cat > expect <<EOF
@@ -471,7 +466,8 @@ cat > expect <<EOF
 EOF
 
 test_expect_success 'simple log --graph --line-prefix="123 "' '
-	test_cmp_graph --line-prefix="123 "
+	git log --graph --line-prefix="123 " --pretty=tformat:%s >actual &&
+	test_cmp expect actual
 '
 
 test_expect_success 'set up merge history' '
@@ -498,7 +494,9 @@ cat > expect <<\EOF
 EOF
 
 test_expect_success 'log --graph with merge' '
-	test_cmp_graph --date-order
+	git log --graph --date-order --pretty=tformat:%s |
+		sed "s/ *\$//" >actual &&
+	test_cmp expect actual
 '
 
 cat > expect <<\EOF
@@ -517,7 +515,9 @@ cat > expect <<\EOF
 EOF
 
 test_expect_success 'log --graph --line-prefix="| | | " with merge' '
-	test_cmp_graph --line-prefix="| | | " --date-order
+	git log --line-prefix="| | | " --graph --date-order --pretty=tformat:%s |
+		sed "s/ *\$//" >actual &&
+	test_cmp expect actual
 '
 
 cat > expect.colors <<\EOF
@@ -537,7 +537,9 @@ EOF
 
 test_expect_success 'log --graph with merge with log.graphColors' '
 	test_config log.graphColors " blue,invalid-color, cyan, red  , " &&
-	lib_test_cmp_colored_graph --date-order --format=%s
+	git log --color=always --graph --date-order --pretty=tformat:%s |
+		test_decode_color | sed "s/ *\$//" >actual &&
+	test_cmp expect.colors actual
 '
 
 test_expect_success 'log --raw --graph -m with merge' '
@@ -666,14 +668,16 @@ cat > expect <<\EOF
 * | | fifth
 * | | fourth
 |/ /
-* / third
+* | third
 |/
 * second
 * initial
 EOF
 
 test_expect_success 'log --graph with merge' '
-	test_cmp_graph --date-order
+	git log --graph --date-order --pretty=tformat:%s |
+		sed "s/ *\$//" >actual &&
+	test_cmp expect actual
 '
 
 test_expect_success 'log.decorate configuration' '
@@ -742,23 +746,7 @@ test_expect_success 'decorate-refs with glob' '
 	octopus-a (octopus-a)
 	reach
 	EOF
-	cat >expect.no-decorate <<-\EOF &&
-	Merge-tag-reach
-	Merge-tags-octopus-a-and-octopus-b
-	seventh
-	octopus-b
-	octopus-a
-	reach
-	EOF
 	git log -n6 --decorate=short --pretty="tformat:%f%d" \
-		--decorate-refs="heads/octopus*" >actual &&
-	test_cmp expect.decorate actual &&
-	git log -n6 --decorate=short --pretty="tformat:%f%d" \
-		--decorate-refs-exclude="heads/octopus*" \
-		--decorate-refs="heads/octopus*" >actual &&
-	test_cmp expect.no-decorate actual &&
-	git -c log.excludeDecoration="heads/octopus*" log \
-		-n6 --decorate=short --pretty="tformat:%f%d" \
 		--decorate-refs="heads/octopus*" >actual &&
 	test_cmp expect.decorate actual
 '
@@ -803,9 +791,6 @@ test_expect_success 'decorate-refs-exclude with glob' '
 	EOF
 	git log -n6 --decorate=short --pretty="tformat:%f%d" \
 		--decorate-refs-exclude="heads/octopus*" >actual &&
-	test_cmp expect.decorate actual &&
-	git -c log.excludeDecoration="heads/octopus*" log \
-		-n6 --decorate=short --pretty="tformat:%f%d" >actual &&
 	test_cmp expect.decorate actual
 '
 
@@ -820,9 +805,6 @@ test_expect_success 'decorate-refs-exclude without globs' '
 	EOF
 	git log -n6 --decorate=short --pretty="tformat:%f%d" \
 		--decorate-refs-exclude="tags/reach" >actual &&
-	test_cmp expect.decorate actual &&
-	git -c log.excludeDecoration="tags/reach" log \
-		-n6 --decorate=short --pretty="tformat:%f%d" >actual &&
 	test_cmp expect.decorate actual
 '
 
@@ -838,19 +820,11 @@ test_expect_success 'multiple decorate-refs-exclude' '
 	git log -n6 --decorate=short --pretty="tformat:%f%d" \
 		--decorate-refs-exclude="heads/octopus*" \
 		--decorate-refs-exclude="tags/reach" >actual &&
-	test_cmp expect.decorate actual &&
-	git -c log.excludeDecoration="heads/octopus*" \
-		-c log.excludeDecoration="tags/reach" log \
-		-n6 --decorate=short --pretty="tformat:%f%d" >actual &&
-	test_cmp expect.decorate actual &&
-	git -c log.excludeDecoration="heads/octopus*" log \
-		--decorate-refs-exclude="tags/reach" \
-		-n6 --decorate=short --pretty="tformat:%f%d" >actual &&
 	test_cmp expect.decorate actual
 '
 
 test_expect_success 'decorate-refs and decorate-refs-exclude' '
-	cat >expect.no-decorate <<-\EOF &&
+	cat >expect.decorate <<-\EOF &&
 	Merge-tag-reach (master)
 	Merge-tags-octopus-a-and-octopus-b
 	seventh
@@ -861,40 +835,6 @@ test_expect_success 'decorate-refs and decorate-refs-exclude' '
 	git log -n6 --decorate=short --pretty="tformat:%f%d" \
 		--decorate-refs="heads/*" \
 		--decorate-refs-exclude="heads/oc*" >actual &&
-	test_cmp expect.no-decorate actual
-'
-
-test_expect_success 'deocrate-refs and log.excludeDecoration' '
-	cat >expect.decorate <<-\EOF &&
-	Merge-tag-reach (master)
-	Merge-tags-octopus-a-and-octopus-b
-	seventh
-	octopus-b (octopus-b)
-	octopus-a (octopus-a)
-	reach (reach)
-	EOF
-	git -c log.excludeDecoration="heads/oc*" log \
-		--decorate-refs="heads/*" \
-		-n6 --decorate=short --pretty="tformat:%f%d" >actual &&
-	test_cmp expect.decorate actual
-'
-
-test_expect_success 'decorate-refs-exclude and simplify-by-decoration' '
-	cat >expect.decorate <<-\EOF &&
-	Merge-tag-reach (HEAD -> master)
-	reach (tag: reach, reach)
-	seventh (tag: seventh)
-	Merge-branch-tangle
-	Merge-branch-side-early-part-into-tangle (tangle)
-	tangle-a (tag: tangle-a)
-	EOF
-	git log -n6 --decorate=short --pretty="tformat:%f%d" \
-		--decorate-refs-exclude="*octopus*" \
-		--simplify-by-decoration >actual &&
-	test_cmp expect.decorate actual &&
-	git -c log.excludeDecoration="*octopus*" log \
-		-n6 --decorate=short --pretty="tformat:%f%d" \
-		--simplify-by-decoration >actual &&
 	test_cmp expect.decorate actual
 '
 
@@ -1003,7 +943,7 @@ cat >expect <<\EOF
 | |
 | | diff --git a/reach.t b/reach.t
 | | new file mode 100644
-| | index BEFORE..AFTER
+| | index 0000000..10c9591
 | | --- /dev/null
 | | +++ b/reach.t
 | | @@ -0,0 +1 @@
@@ -1026,7 +966,7 @@ cat >expect <<\EOF
 | | |
 | | |   diff --git a/octopus-b.t b/octopus-b.t
 | | |   new file mode 100644
-| | |   index BEFORE..AFTER
+| | |   index 0000000..d5fcad0
 | | |   --- /dev/null
 | | |   +++ b/octopus-b.t
 | | |   @@ -0,0 +1 @@
@@ -1042,7 +982,7 @@ cat >expect <<\EOF
 | |
 | |   diff --git a/octopus-a.t b/octopus-a.t
 | |   new file mode 100644
-| |   index BEFORE..AFTER
+| |   index 0000000..11ee015
 | |   --- /dev/null
 | |   +++ b/octopus-a.t
 | |   @@ -0,0 +1 @@
@@ -1058,7 +998,7 @@ cat >expect <<\EOF
 |
 |   diff --git a/seventh.t b/seventh.t
 |   new file mode 100644
-|   index BEFORE..AFTER
+|   index 0000000..9744ffc
 |   --- /dev/null
 |   +++ b/seventh.t
 |   @@ -0,0 +1 @@
@@ -1092,7 +1032,7 @@ cat >expect <<\EOF
 | | | |
 | | | | diff --git a/tangle-a b/tangle-a
 | | | | new file mode 100644
-| | | | index BEFORE..AFTER
+| | | | index 0000000..7898192
 | | | | --- /dev/null
 | | | | +++ b/tangle-a
 | | | | @@ -0,0 +1 @@
@@ -1114,7 +1054,7 @@ cat >expect <<\EOF
 | | | |
 | | | |   diff --git a/2 b/2
 | | | |   new file mode 100644
-| | | |   index BEFORE..AFTER
+| | | |   index 0000000..0cfbf08
 | | | |   --- /dev/null
 | | | |   +++ b/2
 | | | |   @@ -0,0 +1 @@
@@ -1130,7 +1070,7 @@ cat >expect <<\EOF
 | | | |
 | | | | diff --git a/1 b/1
 | | | | new file mode 100644
-| | | | index BEFORE..AFTER
+| | | | index 0000000..d00491f
 | | | | --- /dev/null
 | | | | +++ b/1
 | | | | @@ -0,0 +1 @@
@@ -1146,7 +1086,7 @@ cat >expect <<\EOF
 | | | |
 | | | | diff --git a/one b/one
 | | | | new file mode 100644
-| | | | index BEFORE..AFTER
+| | | | index 0000000..9a33383
 | | | | --- /dev/null
 | | | | +++ b/one
 | | | | @@ -0,0 +1 @@
@@ -1162,7 +1102,7 @@ cat >expect <<\EOF
 | | |
 | | |   diff --git a/a/two b/a/two
 | | |   deleted file mode 100644
-| | |   index BEFORE..AFTER
+| | |   index 9245af5..0000000
 | | |   --- a/a/two
 | | |   +++ /dev/null
 | | |   @@ -1 +0,0 @@
@@ -1178,7 +1118,7 @@ cat >expect <<\EOF
 | | |
 | | | diff --git a/a/two b/a/two
 | | | new file mode 100644
-| | | index BEFORE..AFTER
+| | | index 0000000..9245af5
 | | | --- /dev/null
 | | | +++ b/a/two
 | | | @@ -0,0 +1 @@
@@ -1194,7 +1134,7 @@ cat >expect <<\EOF
 | |
 | |   diff --git a/ein b/ein
 | |   new file mode 100644
-| |   index BEFORE..AFTER
+| |   index 0000000..9d7e69f
 | |   --- /dev/null
 | |   +++ b/ein
 | |   @@ -0,0 +1 @@
@@ -1211,14 +1151,14 @@ cat >expect <<\EOF
 |
 |   diff --git a/ichi b/ichi
 |   new file mode 100644
-|   index BEFORE..AFTER
+|   index 0000000..9d7e69f
 |   --- /dev/null
 |   +++ b/ichi
 |   @@ -0,0 +1 @@
 |   +ichi
 |   diff --git a/one b/one
 |   deleted file mode 100644
-|   index BEFORE..AFTER
+|   index 9d7e69f..0000000
 |   --- a/one
 |   +++ /dev/null
 |   @@ -1 +0,0 @@
@@ -1233,7 +1173,7 @@ cat >expect <<\EOF
 |  1 file changed, 1 insertion(+), 1 deletion(-)
 |
 | diff --git a/one b/one
-| index BEFORE..AFTER 100644
+| index 5626abf..9d7e69f 100644
 | --- a/one
 | +++ b/one
 | @@ -1 +1 @@
@@ -1250,15 +1190,30 @@ cat >expect <<\EOF
 
   diff --git a/one b/one
   new file mode 100644
-  index BEFORE..AFTER
+  index 0000000..5626abf
   --- /dev/null
   +++ b/one
   @@ -0,0 +1 @@
   +one
 EOF
 
+sanitize_output () {
+	sed -e 's/ *$//' \
+	    -e 's/commit [0-9a-f]*$/commit COMMIT_OBJECT_NAME/' \
+	    -e 's/Merge: [ 0-9a-f]*$/Merge: MERGE_PARENTS/' \
+	    -e 's/Merge tag.*/Merge HEADS DESCRIPTION/' \
+	    -e 's/Merge commit.*/Merge HEADS DESCRIPTION/' \
+	    -e 's/, 0 deletions(-)//' \
+	    -e 's/, 0 insertions(+)//' \
+	    -e 's/ 1 files changed, / 1 file changed, /' \
+	    -e 's/, 1 deletions(-)/, 1 deletion(-)/' \
+	    -e 's/, 1 insertions(+)/, 1 insertion(+)/'
+}
+
 test_expect_success 'log --graph with diff and stats' '
-	lib_test_cmp_short_graph --no-renames --stat -p
+	git log --no-renames --graph --pretty=short --stat -p >actual &&
+	sanitize_output >actual.sanitized <actual &&
+	test_i18ncmp expect actual.sanitized
 '
 
 cat >expect <<\EOF
@@ -1278,7 +1233,7 @@ cat >expect <<\EOF
 *** | |
 *** | | diff --git a/reach.t b/reach.t
 *** | | new file mode 100644
-*** | | index BEFORE..AFTER
+*** | | index 0000000..10c9591
 *** | | --- /dev/null
 *** | | +++ b/reach.t
 *** | | @@ -0,0 +1 @@
@@ -1301,7 +1256,7 @@ cat >expect <<\EOF
 *** | | |
 *** | | |   diff --git a/octopus-b.t b/octopus-b.t
 *** | | |   new file mode 100644
-*** | | |   index BEFORE..AFTER
+*** | | |   index 0000000..d5fcad0
 *** | | |   --- /dev/null
 *** | | |   +++ b/octopus-b.t
 *** | | |   @@ -0,0 +1 @@
@@ -1317,7 +1272,7 @@ cat >expect <<\EOF
 *** | |
 *** | |   diff --git a/octopus-a.t b/octopus-a.t
 *** | |   new file mode 100644
-*** | |   index BEFORE..AFTER
+*** | |   index 0000000..11ee015
 *** | |   --- /dev/null
 *** | |   +++ b/octopus-a.t
 *** | |   @@ -0,0 +1 @@
@@ -1333,7 +1288,7 @@ cat >expect <<\EOF
 *** |
 *** |   diff --git a/seventh.t b/seventh.t
 *** |   new file mode 100644
-*** |   index BEFORE..AFTER
+*** |   index 0000000..9744ffc
 *** |   --- /dev/null
 *** |   +++ b/seventh.t
 *** |   @@ -0,0 +1 @@
@@ -1367,7 +1322,7 @@ cat >expect <<\EOF
 *** | | | |
 *** | | | | diff --git a/tangle-a b/tangle-a
 *** | | | | new file mode 100644
-*** | | | | index BEFORE..AFTER
+*** | | | | index 0000000..7898192
 *** | | | | --- /dev/null
 *** | | | | +++ b/tangle-a
 *** | | | | @@ -0,0 +1 @@
@@ -1389,7 +1344,7 @@ cat >expect <<\EOF
 *** | | | |
 *** | | | |   diff --git a/2 b/2
 *** | | | |   new file mode 100644
-*** | | | |   index BEFORE..AFTER
+*** | | | |   index 0000000..0cfbf08
 *** | | | |   --- /dev/null
 *** | | | |   +++ b/2
 *** | | | |   @@ -0,0 +1 @@
@@ -1405,7 +1360,7 @@ cat >expect <<\EOF
 *** | | | |
 *** | | | | diff --git a/1 b/1
 *** | | | | new file mode 100644
-*** | | | | index BEFORE..AFTER
+*** | | | | index 0000000..d00491f
 *** | | | | --- /dev/null
 *** | | | | +++ b/1
 *** | | | | @@ -0,0 +1 @@
@@ -1421,7 +1376,7 @@ cat >expect <<\EOF
 *** | | | |
 *** | | | | diff --git a/one b/one
 *** | | | | new file mode 100644
-*** | | | | index BEFORE..AFTER
+*** | | | | index 0000000..9a33383
 *** | | | | --- /dev/null
 *** | | | | +++ b/one
 *** | | | | @@ -0,0 +1 @@
@@ -1437,7 +1392,7 @@ cat >expect <<\EOF
 *** | | |
 *** | | |   diff --git a/a/two b/a/two
 *** | | |   deleted file mode 100644
-*** | | |   index BEFORE..AFTER
+*** | | |   index 9245af5..0000000
 *** | | |   --- a/a/two
 *** | | |   +++ /dev/null
 *** | | |   @@ -1 +0,0 @@
@@ -1453,7 +1408,7 @@ cat >expect <<\EOF
 *** | | |
 *** | | | diff --git a/a/two b/a/two
 *** | | | new file mode 100644
-*** | | | index BEFORE..AFTER
+*** | | | index 0000000..9245af5
 *** | | | --- /dev/null
 *** | | | +++ b/a/two
 *** | | | @@ -0,0 +1 @@
@@ -1469,7 +1424,7 @@ cat >expect <<\EOF
 *** | |
 *** | |   diff --git a/ein b/ein
 *** | |   new file mode 100644
-*** | |   index BEFORE..AFTER
+*** | |   index 0000000..9d7e69f
 *** | |   --- /dev/null
 *** | |   +++ b/ein
 *** | |   @@ -0,0 +1 @@
@@ -1486,14 +1441,14 @@ cat >expect <<\EOF
 *** |
 *** |   diff --git a/ichi b/ichi
 *** |   new file mode 100644
-*** |   index BEFORE..AFTER
+*** |   index 0000000..9d7e69f
 *** |   --- /dev/null
 *** |   +++ b/ichi
 *** |   @@ -0,0 +1 @@
 *** |   +ichi
 *** |   diff --git a/one b/one
 *** |   deleted file mode 100644
-*** |   index BEFORE..AFTER
+*** |   index 9d7e69f..0000000
 *** |   --- a/one
 *** |   +++ /dev/null
 *** |   @@ -1 +0,0 @@
@@ -1508,7 +1463,7 @@ cat >expect <<\EOF
 *** |  1 file changed, 1 insertion(+), 1 deletion(-)
 *** |
 *** | diff --git a/one b/one
-*** | index BEFORE..AFTER 100644
+*** | index 5626abf..9d7e69f 100644
 *** | --- a/one
 *** | +++ b/one
 *** | @@ -1 +1 @@
@@ -1525,7 +1480,7 @@ cat >expect <<\EOF
 ***
 ***   diff --git a/one b/one
 ***   new file mode 100644
-***   index BEFORE..AFTER
+***   index 0000000..5626abf
 ***   --- /dev/null
 ***   +++ b/one
 ***   @@ -0,0 +1 @@
@@ -1533,7 +1488,9 @@ cat >expect <<\EOF
 EOF
 
 test_expect_success 'log --line-prefix="*** " --graph with diff and stats' '
-	lib_test_cmp_short_graph --line-prefix="*** " --no-renames --stat -p
+	git log --line-prefix="*** " --no-renames --graph --pretty=short --stat -p >actual &&
+	sanitize_output >actual.sanitized <actual &&
+	test_i18ncmp expect actual.sanitized
 '
 
 cat >expect <<-\EOF
@@ -1555,7 +1512,9 @@ cat >expect <<-\EOF
 EOF
 
 test_expect_success 'log --graph with --name-status' '
-	test_cmp_graph --name-status tangle..reach
+	git log --graph --format=%s --name-status tangle..reach >actual &&
+	sanitize_output <actual >actual.sanitized &&
+	test_cmp expect actual.sanitized
 '
 
 cat >expect <<-\EOF
@@ -1577,7 +1536,9 @@ cat >expect <<-\EOF
 EOF
 
 test_expect_success 'log --graph with --name-only' '
-	test_cmp_graph --name-only tangle..reach
+	git log --graph --format=%s --name-only tangle..reach >actual &&
+	sanitize_output <actual >actual.sanitized &&
+	test_cmp expect actual.sanitized
 '
 
 test_expect_success 'dotdot is a parent directory' '
@@ -1595,46 +1556,10 @@ test_expect_success GPG 'setup signed branch' '
 	git commit -S -m signed_commit
 '
 
-test_expect_success GPG 'setup signed branch with subkey' '
-	test_when_finished "git reset --hard && git checkout master" &&
-	git checkout -b signed-subkey master &&
-	echo foo >foo &&
-	git add foo &&
-	git commit -SB7227189 -m signed_commit
-'
-
-test_expect_success GPGSM 'setup signed branch x509' '
-	test_when_finished "git reset --hard && git checkout master" &&
-	git checkout -b signed-x509 master &&
-	echo foo >foo &&
-	git add foo &&
-	test_config gpg.format x509 &&
-	test_config user.signingkey $GIT_COMMITTER_EMAIL &&
-	git commit -S -m signed_commit
-'
-
-test_expect_success GPGSM 'log x509 fingerprint' '
-	echo "F8BF62E0693D0694816377099909C779FA23FD65 | " >expect &&
-	git log -n1 --format="%GF | %GP" signed-x509 >actual &&
-	test_cmp expect actual
-'
-
-test_expect_success GPGSM 'log OpenPGP fingerprint' '
-	echo "D4BE22311AD3131E5EDA29A461092E85B7227189" > expect &&
-	git log -n1 --format="%GP" signed-subkey >actual &&
-	test_cmp expect actual
-'
-
 test_expect_success GPG 'log --graph --show-signature' '
 	git log --graph --show-signature -n1 signed >actual &&
 	grep "^| gpg: Signature made" actual &&
 	grep "^| gpg: Good signature" actual
-'
-
-test_expect_success GPGSM 'log --graph --show-signature x509' '
-	git log --graph --show-signature -n1 signed-x509 >actual &&
-	grep "^| gpgsm: Signature made" actual &&
-	grep "^| gpgsm: Good signature" actual
 '
 
 test_expect_success GPG 'log --graph --show-signature for merged tag' '
@@ -1655,152 +1580,6 @@ test_expect_success GPG 'log --graph --show-signature for merged tag' '
 	grep "^| | gpg: Signature made" actual &&
 	grep "^| | gpg: Good signature" actual
 '
-
-test_expect_success GPG 'log --graph --show-signature for merged tag in shallow clone' '
-	test_when_finished "git reset --hard && git checkout master" &&
-	git checkout -b plain-shallow master &&
-	echo aaa >bar &&
-	git add bar &&
-	git commit -m bar_commit &&
-	git checkout --detach master &&
-	echo bbb >baz &&
-	git add baz &&
-	git commit -m baz_commit &&
-	git tag -s -m signed_tag_msg signed_tag_shallow &&
-	hash=$(git rev-parse HEAD) &&
-	git checkout plain-shallow &&
-	git merge --no-ff -m msg signed_tag_shallow &&
-	git clone --depth 1 --no-local . shallow &&
-	test_when_finished "rm -rf shallow" &&
-	git -C shallow log --graph --show-signature -n1 plain-shallow >actual &&
-	grep "tag signed_tag_shallow names a non-parent $hash" actual
-'
-
-test_expect_success GPG 'log --graph --show-signature for merged tag with missing key' '
-	test_when_finished "git reset --hard && git checkout master" &&
-	git checkout -b plain-nokey master &&
-	echo aaa >bar &&
-	git add bar &&
-	git commit -m bar_commit &&
-	git checkout -b tagged-nokey master &&
-	echo bbb >baz &&
-	git add baz &&
-	git commit -m baz_commit &&
-	git tag -s -m signed_tag_msg signed_tag_nokey &&
-	git checkout plain-nokey &&
-	git merge --no-ff -m msg signed_tag_nokey &&
-	GNUPGHOME=. git log --graph --show-signature -n1 plain-nokey >actual &&
-	grep "^|\\\  merged tag" actual &&
-	grep "^| | gpg: Signature made" actual &&
-	grep -E "^| | gpg: Can'"'"'t check signature: (public key not found|No public key)" actual
-'
-
-test_expect_success GPG 'log --graph --show-signature for merged tag with bad signature' '
-	test_when_finished "git reset --hard && git checkout master" &&
-	git checkout -b plain-bad master &&
-	echo aaa >bar &&
-	git add bar &&
-	git commit -m bar_commit &&
-	git checkout -b tagged-bad master &&
-	echo bbb >baz &&
-	git add baz &&
-	git commit -m baz_commit &&
-	git tag -s -m signed_tag_msg signed_tag_bad &&
-	git cat-file tag signed_tag_bad >raw &&
-	sed -e "s/signed_tag_msg/forged/" raw >forged &&
-	git hash-object -w -t tag forged >forged.tag &&
-	git checkout plain-bad &&
-	git merge --no-ff -m msg "$(cat forged.tag)" &&
-	git log --graph --show-signature -n1 plain-bad >actual &&
-	grep "^|\\\  merged tag" actual &&
-	grep "^| | gpg: Signature made" actual &&
-	grep "^| | gpg: BAD signature from" actual
-'
-
-test_expect_success GPG 'log --show-signature for merged tag with GPG failure' '
-	test_when_finished "git reset --hard && git checkout master" &&
-	git checkout -b plain-fail master &&
-	echo aaa >bar &&
-	git add bar &&
-	git commit -m bar_commit &&
-	git checkout -b tagged-fail master &&
-	echo bbb >baz &&
-	git add baz &&
-	git commit -m baz_commit &&
-	git tag -s -m signed_tag_msg signed_tag_fail &&
-	git checkout plain-fail &&
-	git merge --no-ff -m msg signed_tag_fail &&
-	TMPDIR="$(pwd)/bogus" git log --show-signature -n1 plain-fail >actual &&
-	grep "^merged tag" actual &&
-	grep "^No signature" actual &&
-	! grep "^gpg: Signature made" actual
-'
-
-test_expect_success GPGSM 'log --graph --show-signature for merged tag x509' '
-	test_when_finished "git reset --hard && git checkout master" &&
-	test_config gpg.format x509 &&
-	test_config user.signingkey $GIT_COMMITTER_EMAIL &&
-	git checkout -b plain-x509 master &&
-	echo aaa >bar &&
-	git add bar &&
-	git commit -m bar_commit &&
-	git checkout -b tagged-x509 master &&
-	echo bbb >baz &&
-	git add baz &&
-	git commit -m baz_commit &&
-	git tag -s -m signed_tag_msg signed_tag_x509 &&
-	git checkout plain-x509 &&
-	git merge --no-ff -m msg signed_tag_x509 &&
-	git log --graph --show-signature -n1 plain-x509 >actual &&
-	grep "^|\\\  merged tag" actual &&
-	grep "^| | gpgsm: Signature made" actual &&
-	grep "^| | gpgsm: Good signature" actual
-'
-
-test_expect_success GPGSM 'log --graph --show-signature for merged tag x509 missing key' '
-	test_when_finished "git reset --hard && git checkout master" &&
-	test_config gpg.format x509 &&
-	test_config user.signingkey $GIT_COMMITTER_EMAIL &&
-	git checkout -b plain-x509-nokey master &&
-	echo aaa >bar &&
-	git add bar &&
-	git commit -m bar_commit &&
-	git checkout -b tagged-x509-nokey master &&
-	echo bbb >baz &&
-	git add baz &&
-	git commit -m baz_commit &&
-	git tag -s -m signed_tag_msg signed_tag_x509_nokey &&
-	git checkout plain-x509-nokey &&
-	git merge --no-ff -m msg signed_tag_x509_nokey &&
-	GNUPGHOME=. git log --graph --show-signature -n1 plain-x509-nokey >actual &&
-	grep "^|\\\  merged tag" actual &&
-	grep "^| | gpgsm: certificate not found" actual
-'
-
-test_expect_success GPGSM 'log --graph --show-signature for merged tag x509 bad signature' '
-	test_when_finished "git reset --hard && git checkout master" &&
-	test_config gpg.format x509 &&
-	test_config user.signingkey $GIT_COMMITTER_EMAIL &&
-	git checkout -b plain-x509-bad master &&
-	echo aaa >bar &&
-	git add bar &&
-	git commit -m bar_commit &&
-	git checkout -b tagged-x509-bad master &&
-	echo bbb >baz &&
-	git add baz &&
-	git commit -m baz_commit &&
-	git tag -s -m signed_tag_msg signed_tag_x509_bad &&
-	git cat-file tag signed_tag_x509_bad >raw &&
-	sed -e "s/signed_tag_msg/forged/" raw >forged &&
-	git hash-object -w -t tag forged >forged.tag &&
-	git checkout plain-x509-bad &&
-	git merge --no-ff -m msg "$(cat forged.tag)" &&
-	git log --graph --show-signature -n1 plain-x509-bad >actual &&
-	grep "^|\\\  merged tag" actual &&
-	grep "^| | gpgsm: Signature made" actual &&
-	grep "^| | gpgsm: invalid signature" actual
-'
-
 
 test_expect_success GPG '--no-show-signature overrides --show-signature' '
 	git log -1 --show-signature --no-show-signature signed >actual &&
@@ -1846,18 +1625,9 @@ test_expect_success 'log diagnoses bogus HEAD' '
 '
 
 test_expect_success 'log does not default to HEAD when rev input is given' '
+	>expect &&
 	git log --branches=does-not-exist >actual &&
-	test_must_be_empty actual
-'
-
-test_expect_success 'do not default to HEAD with ignored object on cmdline' '
-	git log --ignore-missing $ZERO_OID >actual &&
-	test_must_be_empty actual
-'
-
-test_expect_success 'do not default to HEAD with ignored object on stdin' '
-	echo $ZERO_OID | git log --ignore-missing --stdin >actual &&
-	test_must_be_empty actual
+	test_cmp expect actual
 '
 
 test_expect_success 'set up --source tests' '
@@ -1869,10 +1639,10 @@ test_expect_success 'set up --source tests' '
 '
 
 test_expect_success 'log --source paints branch names' '
-	cat >expect <<-EOF &&
-	$(git rev-parse --short :/three)	source-b three
-	$(git rev-parse --short :/two  )	source-a two
-	$(git rev-parse --short :/one  )	source-b one
+	cat >expect <<-\EOF &&
+	09e12a9	source-b three
+	8e393e1	source-a two
+	1ac6c77	source-b one
 	EOF
 	git log --oneline --source source-a source-b >actual &&
 	test_cmp expect actual
@@ -1880,33 +1650,22 @@ test_expect_success 'log --source paints branch names' '
 
 test_expect_success 'log --source paints tag names' '
 	git tag -m tagged source-tag &&
-	cat >expect <<-EOF &&
-	$(git rev-parse --short :/three)	source-tag three
-	$(git rev-parse --short :/two  )	source-a two
-	$(git rev-parse --short :/one  )	source-tag one
+	cat >expect <<-\EOF &&
+	09e12a9	source-tag three
+	8e393e1	source-a two
+	1ac6c77	source-tag one
 	EOF
 	git log --oneline --source source-tag source-a >actual &&
 	test_cmp expect actual
 '
 
 test_expect_success 'log --source paints symmetric ranges' '
-	cat >expect <<-EOF &&
-	$(git rev-parse --short :/three)	source-b three
-	$(git rev-parse --short :/two  )	source-a two
+	cat >expect <<-\EOF &&
+	09e12a9	source-b three
+	8e393e1	source-a two
 	EOF
 	git log --oneline --source source-a...source-b >actual &&
 	test_cmp expect actual
-'
-
-test_expect_success '--exclude-promisor-objects does not BUG-crash' '
-	test_must_fail git log --exclude-promisor-objects source-a
-'
-
-test_expect_success 'log --end-of-options' '
-       git update-ref refs/heads/--source HEAD &&
-       git log --end-of-options --source >actual &&
-       git log >expect &&
-       test_cmp expect actual
 '
 
 test_done

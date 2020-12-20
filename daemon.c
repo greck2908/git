@@ -9,12 +9,7 @@
 #define initgroups(x, y) (0) /* nothing */
 #endif
 
-static enum log_destination {
-	LOG_DESTINATION_UNSET = -1,
-	LOG_DESTINATION_NONE = 0,
-	LOG_DESTINATION_STDERR = 1,
-	LOG_DESTINATION_SYSLOG = 2,
-} log_destination = LOG_DESTINATION_UNSET;
+static int log_syslog;
 static int verbose;
 static int reuseaddr;
 static int informative_errors;
@@ -30,7 +25,6 @@ static const char daemon_usage[] =
 "           [--access-hook=<path>]\n"
 "           [--inetd | [--listen=<host_or_ipaddr>] [--port=<n>]\n"
 "                      [--detach] [--user=<user> [--group=<group>]]\n"
-"           [--log-destination=(stderr|syslog|none)]\n"
 "           [<directory>...]";
 
 /* List of acceptable pathname prefixes */
@@ -80,14 +74,11 @@ static const char *get_ip_address(struct hostinfo *hi)
 
 static void logreport(int priority, const char *err, va_list params)
 {
-	switch (log_destination) {
-	case LOG_DESTINATION_SYSLOG: {
+	if (log_syslog) {
 		char buf[1024];
 		vsnprintf(buf, sizeof(buf), err, params);
 		syslog(priority, "%s", buf);
-		break;
-	}
-	case LOG_DESTINATION_STDERR:
+	} else {
 		/*
 		 * Since stderr is set to buffered mode, the
 		 * logging of different processes will not overlap
@@ -97,11 +88,6 @@ static void logreport(int priority, const char *err, va_list params)
 		vfprintf(stderr, err, params);
 		fputc('\n', stderr);
 		fflush(stderr);
-		break;
-	case LOG_DESTINATION_NONE:
-		break;
-	case LOG_DESTINATION_UNSET:
-		BUG("log destination not initialized correctly");
 	}
 }
 
@@ -296,7 +282,7 @@ static const char *path_ok(const char *directory, struct hostinfo *hi)
 	return NULL;		/* Fallthrough. Deny by default */
 }
 
-typedef int (*daemon_service_fn)(const struct strvec *env);
+typedef int (*daemon_service_fn)(const struct argv_array *env);
 struct daemon_service {
 	const char *name;
 	const char *config_name;
@@ -377,7 +363,7 @@ error_return:
 }
 
 static int run_service(const char *dir, struct daemon_service *service,
-		       struct hostinfo *hi, const struct strvec *env)
+		       struct hostinfo *hi, const struct argv_array *env)
 {
 	const char *path;
 	int enabled = service->enabled;
@@ -462,7 +448,7 @@ static void copy_to_log(int fd)
 
 static int run_service_command(struct child_process *cld)
 {
-	strvec_push(&cld->args, ".");
+	argv_array_push(&cld->args, ".");
 	cld->git_cmd = 1;
 	cld->err = -1;
 	if (start_command(cld))
@@ -476,33 +462,33 @@ static int run_service_command(struct child_process *cld)
 	return finish_command(cld);
 }
 
-static int upload_pack(const struct strvec *env)
+static int upload_pack(const struct argv_array *env)
 {
 	struct child_process cld = CHILD_PROCESS_INIT;
-	strvec_pushl(&cld.args, "upload-pack", "--strict", NULL);
-	strvec_pushf(&cld.args, "--timeout=%u", timeout);
+	argv_array_pushl(&cld.args, "upload-pack", "--strict", NULL);
+	argv_array_pushf(&cld.args, "--timeout=%u", timeout);
 
-	strvec_pushv(&cld.env_array, env->v);
+	argv_array_pushv(&cld.env_array, env->argv);
 
 	return run_service_command(&cld);
 }
 
-static int upload_archive(const struct strvec *env)
+static int upload_archive(const struct argv_array *env)
 {
 	struct child_process cld = CHILD_PROCESS_INIT;
-	strvec_push(&cld.args, "upload-archive");
+	argv_array_push(&cld.args, "upload-archive");
 
-	strvec_pushv(&cld.env_array, env->v);
+	argv_array_pushv(&cld.env_array, env->argv);
 
 	return run_service_command(&cld);
 }
 
-static int receive_pack(const struct strvec *env)
+static int receive_pack(const struct argv_array *env)
 {
 	struct child_process cld = CHILD_PROCESS_INIT;
-	strvec_push(&cld.args, "receive-pack");
+	argv_array_push(&cld.args, "receive-pack");
 
-	strvec_pushv(&cld.env_array, env->v);
+	argv_array_pushv(&cld.env_array, env->argv);
 
 	return run_service_command(&cld);
 }
@@ -598,7 +584,7 @@ static void canonicalize_client(struct strbuf *out, const char *in)
  * Read the host as supplied by the client connection.
  *
  * Returns a pointer to the character after the NUL byte terminating the host
- * argument, or 'extra_args' if there is no host argument.
+ * arguemnt, or 'extra_args' if there is no host arguemnt.
  */
 static char *parse_host_arg(struct hostinfo *hi, char *extra_args, int buflen)
 {
@@ -611,7 +597,6 @@ static char *parse_host_arg(struct hostinfo *hi, char *extra_args, int buflen)
 		if (strncasecmp("host=", extra_args, 5) == 0) {
 			val = extra_args + 5;
 			vallen = strlen(val) + 1;
-			loginfo("Extended attribute \"host\": %s", val);
 			if (*val) {
 				/* Split <host>:<port> at colon. */
 				char *host;
@@ -633,7 +618,7 @@ static char *parse_host_arg(struct hostinfo *hi, char *extra_args, int buflen)
 	return extra_args;
 }
 
-static void parse_extra_args(struct hostinfo *hi, struct strvec *env,
+static void parse_extra_args(struct hostinfo *hi, struct argv_array *env,
 			     char *extra_args, int buflen)
 {
 	const char *end = extra_args + buflen;
@@ -652,7 +637,7 @@ static void parse_extra_args(struct hostinfo *hi, struct strvec *env,
 		 * service that will be run.
 		 *
 		 * If there ends up being a particular arg in the future that
-		 * git-daemon needs to parse specifically (like the 'host' arg)
+		 * git-daemon needs to parse specificly (like the 'host' arg)
 		 * then it can be parsed here and not added to 'git_protocol'.
 		 */
 		if (*arg) {
@@ -662,11 +647,9 @@ static void parse_extra_args(struct hostinfo *hi, struct strvec *env,
 		}
 	}
 
-	if (git_protocol.len > 0) {
-		loginfo("Extended attribute \"protocol\": %s", git_protocol.buf);
-		strvec_pushf(env, GIT_PROTOCOL_ENVIRONMENT "=%s",
-			     git_protocol.buf);
-	}
+	if (git_protocol.len > 0)
+		argv_array_pushf(env, GIT_PROTOCOL_ENVIRONMENT "=%s",
+				 git_protocol.buf);
 	strbuf_release(&git_protocol);
 }
 
@@ -761,7 +744,7 @@ static int execute(void)
 	int pktlen, len, i;
 	char *addr = getenv("REMOTE_ADDR"), *port = getenv("REMOTE_PORT");
 	struct hostinfo hi;
-	struct strvec env = STRVEC_INIT;
+	struct argv_array env = ARGV_ARRAY_INIT;
 
 	hostinfo_init(&hi);
 
@@ -774,8 +757,14 @@ static int execute(void)
 	alarm(0);
 
 	len = strlen(line);
-	if (len && line[len-1] == '\n')
-		line[len-1] = 0;
+	if (pktlen != len)
+		loginfo("Extended attributes (%d bytes) exist <%.*s>",
+			(int) pktlen - len,
+			(int) pktlen - len, line + len + 1);
+	if (len && line[len-1] == '\n') {
+		line[--len] = 0;
+		pktlen--;
+	}
 
 	/* parse additional args hidden behind a NUL byte */
 	if (len != pktlen)
@@ -794,13 +783,13 @@ static int execute(void)
 			 */
 			int rc = run_service(arg, s, &hi, &env);
 			hostinfo_clear(&hi);
-			strvec_clear(&env);
+			argv_array_clear(&env);
 			return rc;
 		}
 	}
 
 	hostinfo_clear(&hi);
-	strvec_clear(&env);
+	argv_array_clear(&env);
 	logerror("Protocol error: '%s'", line);
 	return -1;
 }
@@ -893,7 +882,7 @@ static void check_dead_children(void)
 			cradle = &blanket->next;
 }
 
-static struct strvec cld_argv = STRVEC_INIT;
+static struct argv_array cld_argv = ARGV_ARRAY_INIT;
 static void handle(int incoming, struct sockaddr *addr, socklen_t addrlen)
 {
 	struct child_process cld = CHILD_PROCESS_INIT;
@@ -913,21 +902,21 @@ static void handle(int incoming, struct sockaddr *addr, socklen_t addrlen)
 		char buf[128] = "";
 		struct sockaddr_in *sin_addr = (void *) addr;
 		inet_ntop(addr->sa_family, &sin_addr->sin_addr, buf, sizeof(buf));
-		strvec_pushf(&cld.env_array, "REMOTE_ADDR=%s", buf);
-		strvec_pushf(&cld.env_array, "REMOTE_PORT=%d",
-			     ntohs(sin_addr->sin_port));
+		argv_array_pushf(&cld.env_array, "REMOTE_ADDR=%s", buf);
+		argv_array_pushf(&cld.env_array, "REMOTE_PORT=%d",
+				 ntohs(sin_addr->sin_port));
 #ifndef NO_IPV6
 	} else if (addr->sa_family == AF_INET6) {
 		char buf[128] = "";
 		struct sockaddr_in6 *sin6_addr = (void *) addr;
 		inet_ntop(AF_INET6, &sin6_addr->sin6_addr, buf, sizeof(buf));
-		strvec_pushf(&cld.env_array, "REMOTE_ADDR=[%s]", buf);
-		strvec_pushf(&cld.env_array, "REMOTE_PORT=%d",
-			     ntohs(sin6_addr->sin6_port));
+		argv_array_pushf(&cld.env_array, "REMOTE_ADDR=[%s]", buf);
+		argv_array_pushf(&cld.env_array, "REMOTE_PORT=%d",
+				 ntohs(sin6_addr->sin6_port));
 #endif
 	}
 
-	cld.argv = cld_argv.v;
+	cld.argv = cld_argv.argv;
 	cld.in = incoming;
 	cld.out = dup(incoming);
 
@@ -1300,6 +1289,7 @@ int cmd_main(int argc, const char **argv)
 		}
 		if (!strcmp(arg, "--inetd")) {
 			inetd_mode = 1;
+			log_syslog = 1;
 			continue;
 		}
 		if (!strcmp(arg, "--verbose")) {
@@ -1307,21 +1297,8 @@ int cmd_main(int argc, const char **argv)
 			continue;
 		}
 		if (!strcmp(arg, "--syslog")) {
-			log_destination = LOG_DESTINATION_SYSLOG;
+			log_syslog = 1;
 			continue;
-		}
-		if (skip_prefix(arg, "--log-destination=", &v)) {
-			if (!strcmp(v, "syslog")) {
-				log_destination = LOG_DESTINATION_SYSLOG;
-				continue;
-			} else if (!strcmp(v, "stderr")) {
-				log_destination = LOG_DESTINATION_STDERR;
-				continue;
-			} else if (!strcmp(v, "none")) {
-				log_destination = LOG_DESTINATION_NONE;
-				continue;
-			} else
-				die("unknown log destination '%s'", v);
 		}
 		if (!strcmp(arg, "--export-all")) {
 			export_all_trees = 1;
@@ -1379,6 +1356,7 @@ int cmd_main(int argc, const char **argv)
 		}
 		if (!strcmp(arg, "--detach")) {
 			detach = 1;
+			log_syslog = 1;
 			continue;
 		}
 		if (skip_prefix(arg, "--user=", &v)) {
@@ -1424,14 +1402,7 @@ int cmd_main(int argc, const char **argv)
 		usage(daemon_usage);
 	}
 
-	if (log_destination == LOG_DESTINATION_UNSET) {
-		if (inetd_mode || detach)
-			log_destination = LOG_DESTINATION_SYSLOG;
-		else
-			log_destination = LOG_DESTINATION_STDERR;
-	}
-
-	if (log_destination == LOG_DESTINATION_SYSLOG) {
+	if (log_syslog) {
 		openlog("git-daemon", LOG_PID, LOG_DAEMON);
 		set_die_routine(daemon_die);
 	} else
@@ -1459,7 +1430,7 @@ int cmd_main(int argc, const char **argv)
 		die("base-path '%s' does not exist or is not a directory",
 		    base_path);
 
-	if (log_destination != LOG_DESTINATION_STDERR) {
+	if (inetd_mode) {
 		if (!freopen("/dev/null", "w", stderr))
 			die_errno("failed to redirect stderr to /dev/null");
 	}
@@ -1476,10 +1447,10 @@ int cmd_main(int argc, const char **argv)
 		write_file(pid_file, "%"PRIuMAX, (uintmax_t) getpid());
 
 	/* prepare argv for serving-processes */
-	strvec_push(&cld_argv, argv[0]); /* git-daemon */
-	strvec_push(&cld_argv, "--serve");
+	argv_array_push(&cld_argv, argv[0]); /* git-daemon */
+	argv_array_push(&cld_argv, "--serve");
 	for (i = 1; i < argc; ++i)
-		strvec_push(&cld_argv, argv[i]);
+		argv_array_push(&cld_argv, argv[i]);
 
 	return serve(&listen_addr, listen_port, cred);
 }
